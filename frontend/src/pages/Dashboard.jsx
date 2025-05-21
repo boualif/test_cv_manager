@@ -8,10 +8,10 @@ const Dashboard = () => {
     recentUploads: 0
   });
 
-  useEffect(() => {
+ useEffect(() => {
     const fetchStats = async () => {
       try {
-        const response = await axios.get('http://localhost:8000/api/candidates');
+        const response = await axios.get('https://test-cv-manager.onrender.com/api/candidates');
         setStats({
           totalCandidates: response.data.length,
           recentUploads: response.data.filter(
@@ -22,9 +22,9 @@ const Dashboard = () => {
         console.error('Error fetching stats:', error);
       }
     };
-
+    
     fetchStats();
-  }, []);
+}, []);
 
   return (
     <div>
