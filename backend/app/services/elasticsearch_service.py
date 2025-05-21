@@ -12,18 +12,21 @@ from app.database.postgresql import SessionLocal
 logger = logging.getLogger(__name__)
 
 class ElasticsearchService:
-    def __init__(self, host="http://localhost:9200"):
+    def __init__(self, host=None):
         self.index_name = "candidates"
+        # Use provided host or get from settings
+        elasticsearch_url = host or settings.ELASTICSEARCH_URL
+        
         try:
             self.es = Elasticsearch(
-                hosts=[host],
+                hosts=[elasticsearch_url],  # Use the URL from environment variable
                 request_timeout=300,
                 retry_on_timeout=True,
                 max_retries=60
             )
             try:
                 info = self.es.info()
-                logger.info(f"Connected to Elasticsearch: {info['version']['number']} at {host}")
+                logger.info(f"Connected to Elasticsearch: {info['version']['number']} at {elasticsearch_url}")
                 health = self.es.cluster.health(request_timeout=30)
                 logger.info(f"Cluster health: {health['status']}")
                 if health['status'] == 'red':
