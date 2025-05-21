@@ -5,7 +5,7 @@ import { useAuth } from '../contexts/AuthContext';
 const ProtectedRoute = ({ allowedRoles }) => {
   const { currentUser, userRole, loading } = useAuth();
   const location = useLocation();
-  
+
   // Show loading screen while auth is being checked
   if (loading) {
     return (
@@ -14,14 +14,14 @@ const ProtectedRoute = ({ allowedRoles }) => {
       </div>
     );
   }
-  
+
   // Check if user is authenticated
   if (!currentUser) {
     return <Navigate to="/login" state={{ from: location }} replace />;
   }
-  
-  // Check if user has allowed role
-  if (!allowedRoles.includes(userRole)) {
+
+  // Check if user has allowed role (case-insensitive)
+  if (!allowedRoles.map(r => r.toLowerCase()).includes(userRole)) {
     // Redirect based on user role
     switch (userRole) {
       case 'admin':
@@ -36,7 +36,7 @@ const ProtectedRoute = ({ allowedRoles }) => {
         return <Navigate to="/login" replace />;
     }
   }
-  
+
   // User is authenticated and authorized
   return <Outlet />;
 };
