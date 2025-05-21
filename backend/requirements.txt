@@ -13,7 +13,7 @@ python-jose==3.3.0
 passlib==1.7.4
 email-validator==2.2.0
 pydantic-settings==2.5.2
-elasticsearch==7.17.0  # Adjust based on Bonsai version
+elasticsearch==7.17.0  # Downgraded for compatibility with 7.10.2
 requests==2.32.3
 python-multipart==0.0.12
-urllib3>=1.26.7,<2.0.0  # Adjust if using older elasticsearch
+urllib3>=1.26.7,<2.0.0  # Compatible with elasticsearch 7.x
