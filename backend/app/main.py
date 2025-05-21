@@ -86,7 +86,7 @@ app = FastAPI(title="Candidate Management API", lifespan=lifespan)
 # Configure CORS - this should be at the top
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173"],  # Your frontend origin
+    allow_origins=["http://localhost:5173","https://test-cv-front.onrender.com"],  # Your frontend origin
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
