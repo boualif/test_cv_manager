@@ -1,4 +1,3 @@
-// src/contexts/AuthContext.jsx
 import React, { createContext, useState, useEffect, useContext } from 'react';
 import { jwtDecode } from 'jwt-decode';
 import AuthService from '../services/auth';
@@ -19,7 +18,6 @@ export const AuthProvider = ({ children }) => {
 
         if (user && user.access_token) {
           try {
-            // Decode the JWT token
             const decoded = jwtDecode(user.access_token);
             const now = Math.floor(Date.now() / 1000);
 
@@ -31,18 +29,14 @@ export const AuthProvider = ({ children }) => {
               return;
             }
 
-            // Set the role from token
-            setUserRole(decoded.role);
-            
+            setUserRole(decoded.role.toLowerCase());
             try {
-              // Try to get the profile from backend
               const profile = await AuthService.getUserProfile();
               setCurrentUser(profile);
             } catch (profileError) {
-              // If profile fetch fails, still use token data
               setCurrentUser({
                 username: decoded.sub,
-                role: decoded.role
+                role: decoded.role.toLowerCase()
               });
             }
           } catch (err) {
@@ -70,21 +64,10 @@ export const AuthProvider = ({ children }) => {
       
       if (response.access_token) {
         const decoded = jwtDecode(response.access_token);
-        setUserRole(decoded.role);
-        
-        try {
-          const profile = await AuthService.getUserProfile();
-          setCurrentUser(profile);
-          return profile;
-        } catch (profileError) {
-          // If profile fetch fails, still use token data
-          const user = {
-            username: decoded.sub,
-            role: decoded.role
-          };
-          setCurrentUser(user);
-          return user;
-        }
+        setUserRole(decoded.role.toLowerCase());
+        const profile = await AuthService.getUserProfile();
+        setCurrentUser(profile);
+        return profile;
       } else {
         throw new Error("No token received");
       }
@@ -112,7 +95,6 @@ export const AuthProvider = ({ children }) => {
     }
   };
 
-  // In your AuthContext.jsx or where you handle API requests
   const createUser = async (userData) => {
     try {
       setError(null);
@@ -120,11 +102,8 @@ export const AuthProvider = ({ children }) => {
       return response.data;
     } catch (err) {
       console.error('Failed to create user:', err);
-      
       let errorMessage = 'Failed to create user.';
-      
       if (err.response && err.response.data && err.response.data.detail) {
-        // Extract validation error messages
         if (Array.isArray(err.response.data.detail)) {
           const validationErrors = err.response.data.detail.map(error => error.msg).join(', ');
           errorMessage = validationErrors;
@@ -132,7 +111,6 @@ export const AuthProvider = ({ children }) => {
           errorMessage = err.response.data.detail;
         }
       }
-      
       setError(errorMessage);
       throw err;
     }
