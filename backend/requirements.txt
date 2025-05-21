@@ -13,6 +13,6 @@ python-jose
 passlib
 email_validator
 pydantic_settings
-elasticsearch==7.5.1
+elasticsearch==6
 requests
 python-multipart
