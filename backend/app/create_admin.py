@@ -6,9 +6,9 @@ current_dir = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, current_dir)
 
 # Now we can import from app
-from app.database.postgresql import SessionLocal
-from app.models.user import User
-from app.utils.auth import get_password_hash
+from database.postgresql import SessionLocal
+from models.user import User
+from utils.auth import get_password_hash
 from sqlalchemy.exc import IntegrityError
 
 def create_admin_user(username="admin", password="AdminPassword123!", email="admin@example.com"):
