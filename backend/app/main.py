@@ -30,6 +30,9 @@ async def lifespan(app: FastAPI):
     # Startup
     logger.info("Starting application...")
     
+    # Create admin user on startup
+    create_admin_user()
+    
     # Initialize Elasticsearch and create index if needed
     await ensure_elasticsearch_ready()
     
@@ -37,6 +40,44 @@ async def lifespan(app: FastAPI):
     
     # Shutdown
     logger.info("Shutting down application...")
+
+# Function to create admin user
+def create_admin_user():
+    """Create an admin user if it doesn't exist."""
+    try:
+        from app.database.postgresql import SessionLocal
+        from app.models.user import User
+        from app.utils.auth import get_password_hash
+        from sqlalchemy.exc import IntegrityError
+        
+        db = SessionLocal()
+        try:
+            # Check if admin already exists
+            admin = db.query(User).filter(User.username == "admin").first()
+            if admin:
+                logger.info("Admin user already exists")
+            else:
+                # Create admin user
+                admin = User(
+                    username="admin",
+                    email="admin@example.com",
+                    hashed_password=get_password_hash("AdminPassword123!"),
+                    role="ADMIN",
+                    is_active=True
+                )
+                db.add(admin)
+                db.commit()
+                logger.info("Admin user created successfully")
+        except IntegrityError:
+            db.rollback()
+            logger.error("Error: User with email 'admin@example.com' already exists")
+        except Exception as e:
+            db.rollback()
+            logger.error(f"Error creating admin user: {str(e)}")
+        finally:
+            db.close()
+    except Exception as e:
+        logger.error(f"Error importing modules for admin creation: {str(e)}")
 
 async def ensure_elasticsearch_ready():
     """Ensure Elasticsearch is ready and create index if it doesn't exist."""
@@ -185,6 +226,20 @@ async def login(form_data: OAuth2PasswordRequestForm = Depends(), db: Session = 
                 detail="An error occurred during login"
             )
         raise
+
+# Special endpoint to create admin user (can be removed after use)
+@app.post("/api/admin/init", tags=["admin"])
+async def init_admin():
+    """Initialize admin user - one-time use endpoint."""
+    try:
+        create_admin_user()
+        return {"message": "Admin user creation initiated"}
+    except Exception as e:
+        logger.error(f"Error in init_admin endpoint: {str(e)}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Admin creation failed: {str(e)}"
+        )
 
 # Health check endpoint with Elasticsearch status
 @app.get("/api/health", tags=["system"])
