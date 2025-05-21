@@ -1,4 +1,3 @@
-// auth.js - Simplified for form-urlencoded only
 import api from './api';
 import axios from 'axios';
 
@@ -12,7 +11,7 @@ const login = async (username, password) => {
     formData.append('password', password);
     
     const response = await axios.post(
-      'http://localhost:8000/api/auth/token', 
+      'https://test-cv-manager.onrender.com/api/auth/token',  // Updated URL
       formData, 
       {
         headers: {
@@ -46,6 +45,7 @@ const login = async (username, password) => {
   }
 };
 
+// Rest of your code remains the same
 const logout = () => {
   localStorage.removeItem('user');
   console.log('User logged out, localStorage cleared');
