@@ -18,7 +18,7 @@ class ElasticsearchService:
         # Use provided host or get from environment variable
         elasticsearch_url = host or os.getenv("ELASTICSEARCH_URL", "https://orelservices-search-7419791421.us-east-1.bonsaisearch.net:443")
         username = os.getenv("ELASTICSEARCH_USERNAME", "tgs5qdc5ph")
-        password = os.getenv("ELASTICSEARCH_PASSWORD", "5qcp06xr")
+        password = os.getenv("ELASTICSEARCH_PASSWORD", "j5qcp06xrl")
         
         try:
             # Initialize Elasticsearch client with Bonsai credentials
