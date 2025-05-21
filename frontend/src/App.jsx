@@ -32,35 +32,35 @@ function App() {
           <Route path="/" element={<Login />} />
           
           {/* Protected routes for admin */}
-          <Route element={<ProtectedRoute allowedRoles={['ADMIN']} />}>
+          <Route element={<ProtectedRoute allowedRoles={['admin']} />}>
             <Route path="/admin/dashboard" element={<AdminDashboard />} />
             <Route path="/admin/users" element={<UserManagement />} />
-            <Route path="/admin/upload" element={<UploadCV />}/>
-            <Route path="/admin/candidates" element={<CandidateList />}/>
+            <Route path="/admin/upload" element={<UploadCV />} />
+            <Route path="/admin/candidates" element={<CandidateList />} />
           </Route>
           
           {/* Protected routes for recruiter */}
-          <Route element={<ProtectedRoute allowedRoles={['RECRUITER', 'ADMIN']} />}>
+          <Route element={<ProtectedRoute allowedRoles={['recruiter', 'admin']} />}>
             <Route path="/recruiter/dashboard" element={<RecruiterDashboard />} />
             <Route path="/upload" element={<UploadCV />} />
           </Route>
           
           {/* Protected routes for sales */}
-          <Route element={<ProtectedRoute allowedRoles={['SALES', 'ADMIN']} />}>
+          <Route element={<ProtectedRoute allowedRoles={['sales', 'admin']} />}>
             <Route path="/sales/dashboard" element={<SalesDashboard />} />
             <Route path="/sales/upload" element={<UploadCV />} />
             <Route path="/sales/candidates/:id" element={<CandidateProfile />} />
           </Route>
           
           {/* Protected routes for HR */}
-          <Route element={<ProtectedRoute allowedRoles={['HR', 'ADMIN']} />}>
+          <Route element={<ProtectedRoute allowedRoles={['hr', 'admin']} />}>
             <Route path="/hr/dashboard" element={<HRDashboard />} />
             <Route path="/hr/upload" element={<UploadCV />} />
             <Route path="/hr/candidates/:id" element={<CandidateProfile />} />
           </Route>
           
           {/* Protected routes for all authenticated users */}
-          <Route element={<ProtectedRoute allowedRoles={['ADMIN', 'RECRUITER', 'SALES', 'HR']} />}>
+          <Route element={<ProtectedRoute allowedRoles={['admin', 'recruiter', 'sales', 'hr']} />}>
             <Route path="/candidates" element={<CandidateList />} /> 
             <Route path="/candidates/:id" element={<CandidateProfile />} />
             <Route path="/upload" element={<UploadCV />} />
