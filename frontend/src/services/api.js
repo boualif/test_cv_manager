@@ -1,12 +1,10 @@
 import axios from 'axios';
-
 const api = axios.create({
-  baseURL: 'http://localhost:8000/api',  // Ajout de /api à l'URL de base
+  baseURL: 'https://test-cv-manager.onrender.com/api',  // Updated to use your deployed backend
   headers: {
     'Content-Type': 'application/json',
   },
 });
-
 // Intercepteur pour ajouter le token d'authentification
 api.interceptors.request.use((config) => {
   try {
@@ -22,5 +20,4 @@ api.interceptors.request.use((config) => {
   }
   return config;
 });
-
 export default api;
