@@ -13,15 +13,11 @@ const Login = () => {
 
   // Check if user is already logged in
   useEffect(() => {
-    if (currentUser) {
-      redirectBasedOnRole();
+    if (currentUser && userRole) {
+      const from = location.state?.from?.pathname || getDashboardByRole();
+      navigate(from, { replace: true });
     }
-  }, [currentUser]);
-
-  const redirectBasedOnRole = () => {
-    const from = location.state?.from?.pathname || getDashboardByRole();
-    navigate(from, { replace: true });
-  };
+  }, [currentUser, userRole]);
 
   const getDashboardByRole = () => {
     switch (userRole) {
@@ -52,7 +48,8 @@ const Login = () => {
       console.log('Attempting login with:', { username });
       await login(username, password);
       console.log('Login successful, user role:', userRole);
-      redirectBasedOnRole();
+      const from = location.state?.from?.pathname || getDashboardByRole();
+      navigate(from, { replace: true });
     } catch (err) {
       console.error('Login error:', err.response || err);
       setError(err.response?.data?.detail || 'Failed to login. Please check your credentials.');
