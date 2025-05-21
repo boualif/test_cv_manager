@@ -11,7 +11,7 @@ from config.settings import settings
 
 # The key part - make sure this uses the environment variable via settings
 config = context.config
-postgres_url = os.getenv("POSTGRES_URL")
+postgres_url = os.getenv("POSTGRES_URI")  # <-- Change this to match
 if postgres_url:
     config.set_main_option('sqlalchemy.url', postgres_url)
 else:
