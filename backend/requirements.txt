@@ -13,3 +13,4 @@ python-jose
 passlib
 email_validator
 pydantic_settings
+elasticsearch
