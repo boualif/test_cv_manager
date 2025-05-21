@@ -9,6 +9,8 @@ import traceback
 import asyncio
 from fastapi.responses import JSONResponse
 from contextlib import asynccontextmanager
+from app.config.settings import settings  # Add this import
+
 
 # Configure logging
 logging.basicConfig(
@@ -44,7 +46,9 @@ async def ensure_elasticsearch_ready():
     for attempt in range(max_retries):
         try:
             from app.services.elasticsearch_service import ElasticsearchService
-            es_service = ElasticsearchService(host="http://localhost:9200")
+            
+            # Use the URL from settings instead of hardcoded localhost
+            es_service = ElasticsearchService(host=settings.ELASTICSEARCH_URL)
             
             # Check if index exists
             if not es_service.es.indices.exists(index=es_service.index_name):
