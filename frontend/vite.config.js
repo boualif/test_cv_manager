@@ -7,9 +7,9 @@ export default defineConfig({
   server: {
     proxy: {
       '/api': {
-        target: 'http://localhost:8000',
+        target: 'https://test-cv-manager.onrender.com',
         changeOrigin: true,
-        secure: false,
+        secure: true, // Change to true since you're using HTTPS
       },
     },
   },
