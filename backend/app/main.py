@@ -118,6 +118,16 @@ app.include_router(candidate.router, prefix="/api/candidates", tags=["candidates
 app.include_router(job.router, prefix="/api/jobs", tags=["jobs"])
 app.include_router(dashboards.router, prefix="/api/dashboards", tags=["dashboards"])
 
+# Root endpoint
+@app.get("/")
+async def read_root():
+    return {
+        "message": "Welcome to Candidate Management API",
+        "version": "1.0.0", 
+        "status": "online",
+        "docs_url": "/docs"
+    }
+
 # Auth endpoint for session creation
 @app.post("/api/auth/token", tags=["auth"])
 async def login(form_data: OAuth2PasswordRequestForm = Depends(), db: Session = Depends(get_db)):
