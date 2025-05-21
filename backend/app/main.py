@@ -182,7 +182,9 @@ async def health_check():
     """Health check endpoint with Elasticsearch status"""
     try:
         from app.services.elasticsearch_service import ElasticsearchService
-        es_service = ElasticsearchService(host="http://localhost:9200")
+        
+        # Use the URL from settings instead of hardcoded localhost
+        es_service = ElasticsearchService(host=settings.ELASTICSEARCH_URL)
         health = es_service.es.cluster.health(request_timeout=5)
         es_status = health['status']
     except:
