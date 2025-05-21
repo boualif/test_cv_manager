@@ -7,6 +7,7 @@ from datetime import datetime
 from app.models.candidate import Candidate
 from app.models.job import Job
 from app.database.postgresql import SessionLocal
+import os
 
 # Configuration du logger
 logger = logging.getLogger(__name__)
@@ -14,31 +15,39 @@ logger = logging.getLogger(__name__)
 class ElasticsearchService:
     def __init__(self, host=None):
         self.index_name = "candidates"
-        # Use provided host or get from settings
-        elasticsearch_url = host or settings.ELASTICSEARCH_URL
+        # Use provided host or get from environment variable
+        elasticsearch_url = host or os.getenv("ELASTICSEARCH_URL", "https://orelservices-search-7419791421.us-east-1.bonsaisearch.net:443")
+        username = os.getenv("ELASTICSEARCH_USERNAME", "tgs5qdc5ph")
+        password = os.getenv("ELASTICSEARCH_PASSWORD", "5qcp06xr")
         
         try:
+            # Initialize Elasticsearch client with Bonsai credentials
             self.es = Elasticsearch(
-                hosts=[elasticsearch_url],  # Use the URL from environment variable
-                request_timeout=300,
+                hosts=[elasticsearch_url],
+                basic_auth=(username, password),  # Bonsai requires authentication
+                verify_certs=True,  # Bonsai uses HTTPS, so verify certificates
+                request_timeout=30,  # Reasonable timeout for Bonsai
                 retry_on_timeout=True,
-                max_retries=60
+                max_retries=3  # Reduced retries to fail faster if needed
             )
-            try:
-                info = self.es.info()
-                logger.info(f"Connected to Elasticsearch: {info['version']['number']} at {elasticsearch_url}")
-                health = self.es.cluster.health(request_timeout=30)
-                logger.info(f"Cluster health: {health['status']}")
-                if health['status'] == 'red':
-                    logger.warning("Cluster health is RED. This may cause indexing failures.")
-                    self._attempt_cluster_recovery()
-            except TransportError as te:
-                logger.error(f"Transport error during connection check: {str(te)}")
-                error_info = getattr(te, 'info', None)
-                status_code = getattr(te, 'status_code', None)
-                if status_code:
-                    logger.error(f"Status code: {status_code}, Info: {error_info}")
-                raise ESConnectionError(f"Elasticsearch connection failed: {str(te)}")
+            
+            # Verify connection
+            info = self.es.info()
+            logger.info(f"Connected to Elasticsearch: {info['version']['number']} at {elasticsearch_url}")
+            
+            # Check cluster health
+            health = self.es.cluster.health()
+            logger.info(f"Cluster health: {health['status']}")
+            if health['status'] == 'red':
+                logger.warning("Cluster health is RED. This may cause indexing failures.")
+                self._attempt_cluster_recovery()
+        except TransportError as te:
+            logger.error(f"Transport error during connection check: {str(te)}")
+            error_info = getattr(te, 'info', None)
+            status_code = getattr(te, 'status_code', None)
+            if status_code:
+                logger.error(f"Status code: {status_code}, Info: {error_info}")
+            raise ESConnectionError(f"Elasticsearch connection failed: {str(te)}")
         except ESConnectionError as ce:
             logger.error(f"Connection error: {str(ce)}")
             raise
@@ -46,6 +55,7 @@ class ElasticsearchService:
             logger.error(f"Unexpected error connecting to Elasticsearch: {str(e)}")
             raise ConnectionError(f"Elasticsearch connection failed: {str(e)}")
 
+    # Rest of the class remains unchanged
     def _attempt_cluster_recovery(self):
         logger.info("Attempting to recover cluster health...")
         try:
@@ -69,7 +79,7 @@ class ElasticsearchService:
             index_body = {
                 "settings": {
                     "number_of_shards": 1,
-                    "number_of_replicas": 0,
+                    "number_of_replicas": 0,  # Bonsai OSS single-node setup
                     "analysis": {
                         "analyzer": {
                             "custom_analyzer": {
@@ -149,7 +159,7 @@ class ElasticsearchService:
                                 "location": {"type": "keyword"},
                                 "start_date": {"type": "keyword"},
                                 "end_date": {"type": "keyword"},
-                                "duration": {"type": "keyword"},  # Used for scoring
+                                "duration": {"type": "keyword"},
                                 "responsibilities": {"type": "text"},
                                 "achievements": {"type": "text"},
                                 "tools_technologies": {"type": "keyword"},
@@ -191,12 +201,12 @@ class ElasticsearchService:
 
             if self.es.indices.exists(index=self.index_name):
                 logger.info(f"Index {self.index_name} exists, deleting to ensure proper settings.")
-                self.es.indices.delete(index=self.index_name, request_timeout=60)
+                self.es.indices.delete(index=self.index_name)
                 logger.info(f"Index {self.index_name} deleted successfully.")
             
-            self.es.indices.create(index=self.index_name, body=index_body, request_timeout=60)
+            self.es.indices.create(index=self.index_name, body=index_body)
             logger.info(f"Index {self.index_name} created successfully with 0 replicas")
-            self.es.cluster.health(index=self.index_name, wait_for_status="yellow", timeout="60s", request_timeout=60)
+            self.es.cluster.health(index=self.index_name, wait_for_status="yellow", timeout="60s")
             logger.info(f"Index {self.index_name} is ready for operations")
             return True
         except RequestError as e:
@@ -213,17 +223,17 @@ class ElasticsearchService:
 
     def diagnose_elasticsearch(self):
         try:
-            health = self.es.cluster.health(request_timeout=30)
+            health = self.es.cluster.health()
             logger.info(f"Cluster health: {health['status']}")
             logger.info(f"Number of nodes: {health['number_of_nodes']}")
             logger.info(f"Unassigned shards: {health['unassigned_shards']}")
-            node_stats = self.es.nodes.stats(request_timeout=30)
+            node_stats = self.es.nodes.stats()
             for node_id, stats in node_stats['nodes'].items():
                 logger.info(f"Node {node_id} JVM heap: {stats['jvm']['mem']['heap_used_percent']}% used")
                 logger.info(f"Node {node_id} CPU: {stats.get('os', {}).get('cpu', {}).get('percent', 'N/A')}%")
                 logger.info(f"Node {node_id} disk: {stats.get('fs', {}).get('total', {}).get('available_in_bytes', 0) / (1024**3):.2f} GB free")
             if self.es.indices.exists(index=self.index_name):
-                index_stats = self.es.indices.stats(index=self.index_name, request_timeout=30)
+                index_stats = self.es.indices.stats(index=self.index_name)
                 logger.info(f"Index {self.index_name} docs: {index_stats['_all']['primaries']['docs']['count']}")
                 logger.info(f"Index {self.index_name} size: {index_stats['_all']['primaries']['store']['size_in_bytes'] / (1024**2):.2f} MB")
             return True
@@ -242,14 +252,12 @@ class ElasticsearchService:
             result = self.es.index(
                 index=self.index_name,
                 body=test_doc,
-                request_timeout=30,
                 refresh=True
             )
             logger.info(f"Test document indexed successfully: {result}")
             get_result = self.es.get(
                 index=self.index_name,
-                id=result['_id'],
-                request_timeout=30
+                id=result['_id']
             )
             logger.info(f"Test document retrieved successfully")
             return True
@@ -347,7 +355,6 @@ class ElasticsearchService:
                         index=self.index_name,
                         id=candidate.id,
                         body=doc,
-                        request_timeout=60,
                         refresh=True
                     )
                     logger.info(f"Indexed candidate ID {candidate.id}")
@@ -466,11 +473,11 @@ class ElasticsearchService:
                 
             for attempt in range(3):
                 try:
-                    health = self.es.cluster.health(request_timeout=30)
+                    health = self.es.cluster.health()
                     if health['status'] == 'red':
                         logger.warning(f"Cluster health is RED before batch {i//batch_size + 1}. Attempting recovery...")
                         self._attempt_cluster_recovery()
-                        health = self.es.cluster.health(request_timeout=30)
+                        health = self.es.cluster.health()
                         if health['status'] == 'red':
                             logger.error("Cluster still unhealthy. Trying individual indexing instead.")
                             for candidate in batch:
@@ -483,7 +490,6 @@ class ElasticsearchService:
                     success, failed = bulk(
                         self.es,
                         actions,
-                        request_timeout=120,
                         refresh=True,
                         raise_on_error=False,
                         stats_only=False
@@ -537,7 +543,7 @@ class ElasticsearchService:
         with improved matching for job titles and skills but reduced boost values.
         """
         try:
-            # Get job information (same as before)
+            # Get job information
             if job_info:
                 job_title = job_info.get('title', '')
                 job_description = job_info.get('description', '')
@@ -579,10 +585,8 @@ class ElasticsearchService:
                 full_text = text.lower()
                 
                 # Try to extract multi-word domain terms
-                # Example: "ingénierie des systèmes" in "Consultant Senior en ingénierie des systèmes"
                 for i in range(len(words)-1):
                     if words[i] == "en" and i < len(words)-1:
-                        # If we find "en" followed by other words, it's likely a domain
                         domain_phrase = " ".join(words[i+1:])
                         domain_terms.append(domain_phrase)
                         break
@@ -631,7 +635,7 @@ class ElasticsearchService:
                                 "match": {
                                     "job_title": {
                                         "query": " ".join(all_domain_terms),
-                                        "boost": 5.0,  # Higher boost for domain terms
+                                        "boost": 5.0,
                                         "operator": "or",
                                         "minimum_should_match": "30%"
                                     }
@@ -645,7 +649,7 @@ class ElasticsearchService:
                                         "match": {
                                             "experiences.job_title": {
                                                 "query": " ".join(all_domain_terms),
-                                                "boost": 4.0,  # Higher boost for domain in experience
+                                                "boost": 4.0,
                                                 "operator": "or",
                                                 "minimum_should_match": "30%"
                                             }
@@ -678,12 +682,12 @@ class ElasticsearchService:
                                     }
                                 }
                             },
-                            # 6. Lower priority match on position terms only (like "Senior", "Consultant")
+                            # 6. Lower priority match on position terms only
                             {
                                 "match": {
                                     "job_title": {
                                         "query": " ".join(position_terms),
-                                        "boost": 0.5,  # Much lower boost for position terms only
+                                        "boost": 0.5,
                                         "operator": "or"
                                     }
                                 }
@@ -725,8 +729,7 @@ class ElasticsearchService:
             logger.info(f"Elasticsearch query: {query}")
             search_result = self.es.search(
                 index=self.index_name,
-                body=query,
-                request_timeout=60
+                body=query
             )
 
             total_hits = search_result["hits"]["total"]["value"] if "total" in search_result["hits"] else 0
@@ -747,14 +750,11 @@ class ElasticsearchService:
                 # Check for domain match in current job title
                 if source.get("job_title"):
                     job_title_lower = source.get("job_title", "").lower()
-                    
-                    # Check for domain terms in job title
                     matching_domain_terms = [term for term in all_domain_terms 
                                             if term.lower() in job_title_lower]
                     
                     if matching_domain_terms:
                         match_reason = f"Domaine similaire: {source.get('job_title')} (termes: {', '.join(matching_domain_terms[:2])})"
-                    # Only fall back to position match if no domain match
                     elif any(term.lower() in job_title_lower for term in position_terms):
                         match_reason = f"Poste similaire: {source.get('job_title')}"
                 
@@ -770,7 +770,6 @@ class ElasticsearchService:
                             domain_match = True
                             break
                     
-                    # If no domain match but competence_phare matches
                     if not domain_match and competence_phare and any(competence_phare.lower() in skill for skill in hard_skills):
                         match_reason = f"Compétence clé: {competence_phare}"
                 
