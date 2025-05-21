@@ -65,21 +65,42 @@ class ElasticsearchService:
             self.es_available = False  # Mark ES as unavailable
             
             # Create a dummy ES object for compatibility
+            # In your __init__ method, replace the DummyES implementation with this:
             class DummyES:
-                def indices(self):
-                    return DummyIndices()
-                def cluster(self):
-                    return DummyCluster()
+                def __init__(self):
+                    self.indices = DummyIndices()
+                    self.cluster = DummyCluster()
+                    
                 def index(self, *args, **kwargs):
                     return {"result": "created", "_id": "dummy-id"}
+                    
                 def search(self, *args, **kwargs):
                     return {"hits": {"total": {"value": 0}, "hits": []}}
+                    
+                def get(self, *args, **kwargs):
+                    return {"_id": "dummy-id", "_source": {}}
+            
             class DummyIndices:
-                def exists(self, *args, **kwargs): return False
-                def create(self, *args, **kwargs): return {"acknowledged": True}
-                def delete(self, *args, **kwargs): return {"acknowledged": True}
+                def exists(self, *args, **kwargs):
+                    return False
+                    
+                def create(self, *args, **kwargs):
+                    return {"acknowledged": True}
+                    
+                def delete(self, *args, **kwargs):
+                    return {"acknowledged": True}
+                    
+                def get(self, *args, **kwargs):
+                    return {}
+                    
+                def stats(self, *args, **kwargs):
+                    return {"_all": {"primaries": {"docs": {"count": 0}, "store": {"size_in_bytes": 0}}}}
+            
             class DummyCluster:
-                def health(self, *args, **kwargs): return {"status": "yellow"}
+                def health(self, *args, **kwargs):
+                    return {"status": "yellow", "number_of_nodes": 1, "unassigned_shards": 0}
+            
+            # Then assign this correctly:
             self.es = DummyES()
 
     # Rest of the class remains unchanged
