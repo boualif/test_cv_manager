@@ -27,39 +27,40 @@ function App() {
     <AuthProvider>
       <Router>
         <Routes>
-          {/* Routes publiques */}
+          {/* Public routes */}
           <Route path="/login" element={<Login />} />
+          <Route path="/" element={<Login />} />
           
-          {/* Routes protégées pour l'administrateur */}
-          <Route element={<ProtectedRoute allowedRoles={['admin']} />}>
+          {/* Protected routes for admin */}
+          <Route element={<ProtectedRoute allowedRoles={['ADMIN']} />}>
             <Route path="/admin/dashboard" element={<AdminDashboard />} />
             <Route path="/admin/users" element={<UserManagement />} />
             <Route path="/admin/upload" element={<UploadCV />}/>
             <Route path="/admin/candidates" element={<CandidateList />}/>
           </Route>
           
-          {/* Routes protégées pour le recruteur */}
-          <Route element={<ProtectedRoute allowedRoles={['recruiter', 'admin']} />}>
+          {/* Protected routes for recruiter */}
+          <Route element={<ProtectedRoute allowedRoles={['RECRUITER', 'ADMIN']} />}>
             <Route path="/recruiter/dashboard" element={<RecruiterDashboard />} />
             <Route path="/upload" element={<UploadCV />} />
           </Route>
           
-          {/* Routes protégées pour le commercial */}
-          <Route element={<ProtectedRoute allowedRoles={['sales', 'admin']} />}>
+          {/* Protected routes for sales */}
+          <Route element={<ProtectedRoute allowedRoles={['SALES', 'ADMIN']} />}>
             <Route path="/sales/dashboard" element={<SalesDashboard />} />
             <Route path="/sales/upload" element={<UploadCV />} />
             <Route path="/sales/candidates/:id" element={<CandidateProfile />} />
           </Route>
           
-          {/* Routes protégées pour les RH */}
-          <Route element={<ProtectedRoute allowedRoles={['hr', 'admin']} />}>
+          {/* Protected routes for HR */}
+          <Route element={<ProtectedRoute allowedRoles={['HR', 'ADMIN']} />}>
             <Route path="/hr/dashboard" element={<HRDashboard />} />
             <Route path="/hr/upload" element={<UploadCV />} />
             <Route path="/hr/candidates/:id" element={<CandidateProfile />} />
           </Route>
           
-          {/* Routes protégées pour tous les utilisateurs authentifiés */}
-          <Route element={<ProtectedRoute allowedRoles={['admin', 'recruiter', 'sales', 'hr']} />}>
+          {/* Protected routes for all authenticated users */}
+          <Route element={<ProtectedRoute allowedRoles={['ADMIN', 'RECRUITER', 'SALES', 'HR']} />}>
             <Route path="/candidates" element={<CandidateList />} /> 
             <Route path="/candidates/:id" element={<CandidateProfile />} />
             <Route path="/upload" element={<UploadCV />} />
@@ -72,8 +73,7 @@ function App() {
             <Route path="/jobs/:id/match" element={<JobMatchAnalysis />} />
           </Route>
           
-          {/* Redirection par défaut */}
-          <Route path="/" element={<Navigate to="/admin/dashboard" replace />} />
+          {/* Default redirect */}
           <Route path="*" element={<Navigate to="/login" replace />} />
         </Routes>
         
