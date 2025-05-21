@@ -9,8 +9,13 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..',
 from models.candidate import Base
 from config.settings import settings
 
+# The key part - make sure this uses the environment variable via settings
 config = context.config
-config.set_main_option('sqlalchemy.url', settings.POSTGRES_URI)
+postgres_url = os.getenv("POSTGRES_URL")
+if postgres_url:
+    config.set_main_option('sqlalchemy.url', postgres_url)
+else:
+    config.set_main_option('sqlalchemy.url', settings.POSTGRES_URI)
 
 connectable = engine_from_config(
     config.get_section(config.config_ini_section),
