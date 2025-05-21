@@ -1,11 +1,12 @@
+import os
 from pydantic_settings import BaseSettings # type: ignore
 
 class Settings(BaseSettings):
-    # Database settings
-    POSTGRES_URI: str = ""
+    # Database settings - use environment variable with fallback
+    POSTGRES_URI: str = os.getenv("POSTGRES_URL", "postgresql://postgres:Messilat@2024#@localhost:5432/candidate_db")
     
-    # Elasticsearch settings
-    ELASTICSEARCH_URL: str = ""
+    # Elasticsearch settings - use environment variable with fallback
+    ELASTICSEARCH_URL: str = os.getenv("ELASTICSEARCH_URL", "http://localhost:9200")
     ELASTICSEARCH_INDEX_CANDIDATES: str = "candidates"
     
     # OpenAI settings
