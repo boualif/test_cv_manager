@@ -15,3 +15,4 @@ email_validator
 pydantic_settings
 elasticsearch
 requests
+python-multipart
