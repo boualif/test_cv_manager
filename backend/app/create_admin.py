@@ -1,10 +1,11 @@
-
 import sys
 import os
 
-# Add the current directory to the Python path
-sys.path.insert(0, os.path.abspath(os.path.dirname(__file__)))
+# Add the current directory to the Python path so we can import from app
+current_dir = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, current_dir)
 
+# Now we can import from app
 from app.database.postgresql import SessionLocal
 from app.models.user import User
 from app.utils.auth import get_password_hash
