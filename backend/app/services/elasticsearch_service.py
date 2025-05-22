@@ -1,5 +1,4 @@
 import logging
-from elasticsearch import ConnectionTimeout
 import time
 from datetime import datetime
 from app.models.candidate import Candidate
@@ -12,7 +11,7 @@ from opensearchpy.helpers import bulk
 # Configuration du logger
 logger = logging.getLogger(__name__)
 
-class ElasticsearchService:  # Gardez le même nom pour compatibilité
+class ElasticsearchService:
     def __init__(self, host=None):
         self.index_name = "candidates"
         self.es_available = True
@@ -26,7 +25,7 @@ class ElasticsearchService:  # Gardez le même nom pour compatibilité
             # ✅ Client OpenSearch natif
             self.es = OpenSearch(
                 hosts=[elasticsearch_url],
-                http_auth=(username, password),  # Différent : http_auth au lieu de basic_auth
+                http_auth=(username, password),
                 timeout=30,
                 max_retries=3,
                 retry_on_timeout=True,
@@ -77,46 +76,51 @@ class ElasticsearchService:  # Gardez le même nom pour compatibilité
                 
             def delete(self, *args, **kwargs):
                 return {"acknowledged": True}
+                
+            def get(self, *args, **kwargs):
+                return {}
+                
+            def stats(self, *args, **kwargs):
+                return {"_all": {"primaries": {"docs": {"count": 0}, "store": {"size_in_bytes": 0}}}}
         
         class DummyCluster:
             def health(self, *args, **kwargs):
-                return {"status": "yellow", "number_of_nodes": 1}
+                return {"status": "yellow", "number_of_nodes": 1, "unassigned_shards": 0}
         
         return DummyES()
 
-    # Rest of the class remains unchanged
     def _attempt_cluster_recovery(self):
         if not self.es_available:
-            logger.info("Elasticsearch is not available, skipping cluster recovery")
+            logger.info("OpenSearch is not available, skipping cluster recovery")
             return
         
         logger.info("Attempting to recover cluster health...")
         try:
-            indices = self.es.indices.get(index="*", request_timeout=30)
+            indices = self.es.indices.get(index="*", timeout=30)
             for index_name in indices:
                 try:
                     logger.info(f"Closing index {index_name}...")
-                    self.es.indices.close(index=index_name, request_timeout=60)
+                    self.es.indices.close(index=index_name, timeout=60)
                     logger.info(f"Opening index {index_name}...")
-                    self.es.indices.open(index=index_name, request_timeout=60)
+                    self.es.indices.open(index=index_name, timeout=60)
                     logger.info(f"Successfully reopened index {index_name}")
                 except Exception as e:
                     logger.error(f"Error recovering index {index_name}: {str(e)}")
-            health = self.es.cluster.health(request_timeout=30)
+            health = self.es.cluster.health(timeout=30)
             logger.info(f"Cluster health after recovery: {health['status']}")
         except Exception as e:
             logger.error(f"Error during cluster recovery attempt: {str(e)}")
 
     def create_index(self):
         if not self.es_available:
-            logger.info("Elasticsearch is not available, skipping index creation")
+            logger.info("OpenSearch is not available, skipping index creation")
             return False
             
         try:
             index_body = {
                 "settings": {
                     "number_of_shards": 1,
-                    "number_of_replicas": 0,  # Bonsai OSS single-node setup
+                    "number_of_replicas": 0,
                     "analysis": {
                         "analyzer": {
                             "custom_analyzer": {
@@ -243,14 +247,14 @@ class ElasticsearchService:  # Gardez le même nom pour compatibilité
             
             self.es.indices.create(index=self.index_name, body=index_body)
             logger.info(f"Index {self.index_name} created successfully with 0 replicas")
-            self.es.cluster.health(index=self.index_name, wait_for_status="yellow", timeout="60s")
+            
+            # ✅ CORRECTION: timeout en secondes (nombre), pas string
+            self.es.cluster.health(index=self.index_name, wait_for_status="yellow", timeout=60)
             logger.info(f"Index {self.index_name} is ready for operations")
             return True
+            
         except RequestError as e:
             logger.error(f"Error creating index: {e.info}")
-            return False
-        except TimeoutError as te:
-            logger.error(f"Timeout error creating index: {str(te)}")
             return False
         except Exception as e:
             logger.error(f"Unexpected error creating index: {str(e)}")
@@ -260,7 +264,7 @@ class ElasticsearchService:  # Gardez le même nom pour compatibilité
 
     def diagnose_elasticsearch(self):
         if not self.es_available:
-            logger.info("Elasticsearch is not available, skipping diagnosis")
+            logger.info("OpenSearch is not available, skipping diagnosis")
             return False
             
         try:
@@ -268,25 +272,29 @@ class ElasticsearchService:  # Gardez le même nom pour compatibilité
             logger.info(f"Cluster health: {health['status']}")
             logger.info(f"Number of nodes: {health['number_of_nodes']}")
             logger.info(f"Unassigned shards: {health['unassigned_shards']}")
-            node_stats = self.es.nodes.stats()
+            
+            # ✅ CORRECTION: timeout numérique
+            node_stats = self.es.nodes.stats(timeout=30)
             for node_id, stats in node_stats['nodes'].items():
                 logger.info(f"Node {node_id} JVM heap: {stats['jvm']['mem']['heap_used_percent']}% used")
                 logger.info(f"Node {node_id} CPU: {stats.get('os', {}).get('cpu', {}).get('percent', 'N/A')}%")
                 logger.info(f"Node {node_id} disk: {stats.get('fs', {}).get('total', {}).get('available_in_bytes', 0) / (1024**3):.2f} GB free")
+            
             if self.es.indices.exists(index=self.index_name):
-                index_stats = self.es.indices.stats(index=self.index_name)
+                index_stats = self.es.indices.stats(index=self.index_name, timeout=30)
                 logger.info(f"Index {self.index_name} docs: {index_stats['_all']['primaries']['docs']['count']}")
                 logger.info(f"Index {self.index_name} size: {index_stats['_all']['primaries']['store']['size_in_bytes'] / (1024**2):.2f} MB")
             return True
+            
         except Exception as e:
-            logger.error(f"Elasticsearch diagnosis failed: {str(e)}")
+            logger.error(f"OpenSearch diagnosis failed: {str(e)}")
             import traceback
             logger.error(traceback.format_exc())
             return False
 
     def index_minimal_test_document(self):
         if not self.es_available:
-            logger.info("Elasticsearch is not available, skipping test document indexing")
+            logger.info("OpenSearch is not available, skipping test document indexing")
             return False
             
         try:
@@ -297,22 +305,26 @@ class ElasticsearchService:  # Gardez le même nom pour compatibilité
             result = self.es.index(
                 index=self.index_name,
                 body=test_doc,
-                refresh=True
+                refresh=True,
+                timeout=30
             )
             logger.info(f"Test document indexed successfully: {result}")
+            
             get_result = self.es.get(
                 index=self.index_name,
-                id=result['_id']
+                id=result['_id'],
+                timeout=30
             )
             logger.info(f"Test document retrieved successfully")
             return True
+            
         except Exception as e:
             logger.error(f"Test document indexing failed: {str(e)}")
             return False
 
     def index_candidate_from_model(self, candidate: Candidate):
         if not self.es_available:
-            logger.info(f"Elasticsearch is not available, skipping indexing for candidate {candidate.id}")
+            logger.info(f"OpenSearch is not available, skipping indexing for candidate {candidate.id}")
             return False
             
         try:
@@ -398,16 +410,19 @@ class ElasticsearchService:  # Gardez le même nom pour compatibilité
                     {"job_title": job.job_title} for job in candidate.suggested_jobs
                 ]
             }
+            
             for attempt in range(3):
                 try:
                     result = self.es.index(
                         index=self.index_name,
                         id=candidate.id,
                         body=doc,
-                        refresh=True
+                        refresh=True,
+                        timeout=30
                     )
-                    logger.info(f"Indexed candidate ID {candidate.id}")
+                    logger.info(f"✅ Indexed candidate ID {candidate.id}")
                     return True
+                    
                 except Exception as e:
                     if attempt < 2:
                         logger.warning(f"Attempt {attempt+1} failed for candidate ID {candidate.id}: {str(e)}")
@@ -415,21 +430,24 @@ class ElasticsearchService:  # Gardez le même nom pour compatibilité
                     else:
                         logger.error(f"Failed to index candidate ID {candidate.id} after 3 attempts: {str(e)}")
                         return False
+                        
         except Exception as e:
             logger.error(f"Failed to index candidate ID {candidate.id}: {str(e)}")
             return False
 
     def bulk_index_candidates(self, candidates, batch_size=3):
         if not self.es_available:
-            logger.info("Elasticsearch is not available, skipping bulk indexing")
+            logger.info("OpenSearch is not available, skipping bulk indexing")
             return 0, candidates
             
         success_count = 0
         failed_candidates = []
+        
         for i in range(0, len(candidates), batch_size):
             batch = candidates[i:i+batch_size]
             actions = []
             candidate_map = {}
+            
             for candidate in batch:
                 doc = {
                     "id": candidate.id,
@@ -513,6 +531,7 @@ class ElasticsearchService:  # Gardez le même nom pour compatibilité
                         {"job_title": job.job_title} for job in candidate.suggested_jobs
                     ]
                 }
+                
                 action = {
                     "_index": self.index_name,
                     "_id": candidate.id,
@@ -526,11 +545,11 @@ class ElasticsearchService:  # Gardez le même nom pour compatibilité
                 
             for attempt in range(3):
                 try:
-                    health = self.es.cluster.health()
+                    health = self.es.cluster.health(timeout=30)
                     if health['status'] == 'red':
                         logger.warning(f"Cluster health is RED before batch {i//batch_size + 1}. Attempting recovery...")
                         self._attempt_cluster_recovery()
-                        health = self.es.cluster.health()
+                        health = self.es.cluster.health(timeout=30)
                         if health['status'] == 'red':
                             logger.error("Cluster still unhealthy. Trying individual indexing instead.")
                             for candidate in batch:
@@ -540,33 +559,41 @@ class ElasticsearchService:  # Gardez le même nom pour compatibilité
                                     failed_candidates.append(candidate)
                             break
                     
+                    # ✅ CORRECTION: timeout numérique pour bulk
                     success, failed = bulk(
                         self.es,
                         actions,
                         refresh=True,
                         raise_on_error=False,
-                        stats_only=False
+                        stats_only=False,
+                        timeout=30
                     )
+                    
                     successful_docs = sum(1 for item in success if 'index' in item and item['index'].get('status') in [200, 201])
                     failed_ids = [item['index']['_id'] for item in failed if 'index' in item]
+                    
                     for item in failed:
                         if 'index' in item:
                             failed_id = item['index'].get('_id')
                             error = item['index'].get('error', {})
                             logger.error(f"Document ID {failed_id} failed: {error.get('type')} - {error.get('reason')}")
+                    
                     success_count += successful_docs
                     logger.info(f"Batch {i//batch_size + 1}: Indexed {successful_docs}/{len(batch)} candidates")
+                    
                     for candidate in batch:
                         if str(candidate.id) in failed_ids:
                             failed_candidates.append(candidate)
                     break
-                except ConnectionTimeout as ct:
-                    logger.warning(f"Timeout on batch {i//batch_size + 1}, attempt {attempt+1}/3: {str(ct)}")
+                    
+                except OSConnectionError as ct:
+                    logger.warning(f"Connection error on batch {i//batch_size + 1}, attempt {attempt+1}/3: {str(ct)}")
                     if attempt < 2:
                         time.sleep(5)
                     else:
                         logger.error(f"Failed to index batch after 3 attempts")
                         failed_candidates.extend(batch)
+                        
                 except Exception as e:
                     logger.error(f"Error in batch {i//batch_size + 1}: {str(e)}")
                     import traceback
@@ -580,11 +607,12 @@ class ElasticsearchService:  # Gardez le même nom pour compatibilité
 
     def retry_failed_candidates(self, failed_candidates):
         if not self.es_available:
-            logger.info("Elasticsearch is not available, skipping retry")
+            logger.info("OpenSearch is not available, skipping retry")
             return 0, failed_candidates
             
         success_count = 0
         still_failed = []
+        
         for candidate in failed_candidates:
             if self.index_candidate_from_model(candidate):
                 success_count += 1
@@ -592,15 +620,15 @@ class ElasticsearchService:  # Gardez le même nom pour compatibilité
             else:
                 still_failed.append(candidate)
             time.sleep(3)
+            
         return success_count, still_failed
 
     def filter_candidates_by_job(self, job_id, limit=10, min_score=0.2, job_info=None):
         """
-        Filter candidates that match a specific job using Elasticsearch,
-        with improved matching for job titles and skills but reduced boost values.
+        Filter candidates that match a specific job using OpenSearch
         """
         if not self.es_available:
-            logger.info(f"Elasticsearch is not available, returning empty results for job {job_id}")
+            logger.info(f"OpenSearch is not available, returning empty results for job {job_id}")
             return {"suggested_candidates": []}
             
         try:
@@ -623,66 +651,45 @@ class ElasticsearchService:  # Gardez le même nom pour compatibilité
                 finally:
                     db.close()
 
-            # Improved term extraction that recognizes common titles vs. domain terms
+            # Extract domain and position terms
             def extract_domain_terms(text):
                 if not text:
                     return [], []
                     
-                # Common job levels/positions to filter out
                 common_position_terms = [
                     "senior", "junior", "consultant", "engineer", "manager", "director", 
                     "lead", "chief", "head", "expert", "specialist", "analyste", "analyst", 
                     "développeur", "developer", "architecte", "architect"
                 ]
                 
-                # Split text and convert to lowercase
                 words = text.lower().split()
-                
-                # Separate position terms from domain terms
                 position_terms = [w for w in words if w in common_position_terms]
                 
-                # Extract domain-specific terms (excluding common position terms)
                 domain_terms = []
-                full_text = text.lower()
-                
-                # Try to extract multi-word domain terms
                 for i in range(len(words)-1):
                     if words[i] == "en" and i < len(words)-1:
                         domain_phrase = " ".join(words[i+1:])
                         domain_terms.append(domain_phrase)
                         break
                 
-                # If no domain phrases found after "en", extract everything except position terms
                 if not domain_terms:
                     domain_terms = [w for w in words if w not in common_position_terms and w not in ["en", "de", "du", "des", "et", "a", "le", "la", "les"]]
                 
-                # Extract individual domain terms if needed
-                if not domain_terms:
-                    for w in words:
-                        if w not in common_position_terms and w not in ["en", "de", "du", "des", "et", "a", "le", "la", "les"]:
-                            domain_terms.append(w)
-                
                 return position_terms, domain_terms
 
-            # Extract both position and domain terms
             position_terms, domain_terms = extract_domain_terms(job_title)
-            
-            # Get domain terms from competence_phare too
             _, competence_domain_terms = extract_domain_terms(competence_phare)
             
-            # Combine all domain terms
-            all_domain_terms = domain_terms + competence_domain_terms
-            all_domain_terms = list(set(all_domain_terms))  # Deduplicate
+            all_domain_terms = list(set(domain_terms + competence_domain_terms))
             
             logger.info(f"Position terms: {position_terms}")
             logger.info(f"Domain terms: {all_domain_terms}")
 
-            # Build the improved query that prioritizes domain match over position match
+            # Build search query
             query = {
                 "query": {
                     "bool": {
                         "should": [
-                            # 1. Exact match on both domain and position (highest priority)
                             {
                                 "match_phrase": {
                                     "job_title": {
@@ -691,7 +698,6 @@ class ElasticsearchService:  # Gardez le même nom pour compatibilité
                                     }
                                 }
                             },
-                            # 2. Match on domain terms (high priority)
                             {
                                 "match": {
                                     "job_title": {
@@ -702,7 +708,6 @@ class ElasticsearchService:  # Gardez le même nom pour compatibilité
                                     }
                                 }
                             },
-                            # 3. Match domain terms in experience
                             {
                                 "nested": {
                                     "path": "experiences",
@@ -720,7 +725,6 @@ class ElasticsearchService:  # Gardez le même nom pour compatibilité
                                     "boost": 2.0
                                 }
                             },
-                            # 4. Match on competence_phare in skills or job title
                             {
                                 "multi_match": {
                                     "query": competence_phare,
@@ -731,7 +735,6 @@ class ElasticsearchService:  # Gardez le même nom pour compatibilité
                                     "minimum_should_match": "30%"
                                 }
                             },
-                            # 5. Match on hard skills with domain terms
                             {
                                 "nested": {
                                     "path": "hard_skills",
@@ -742,35 +745,10 @@ class ElasticsearchService:  # Gardez le même nom pour compatibilité
                                         }
                                     }
                                 }
-                            },
-                            # 6. Lower priority match on position terms only
-                            {
-                                "match": {
-                                    "job_title": {
-                                        "query": " ".join(position_terms),
-                                        "boost": 0.5,
-                                        "operator": "or"
-                                    }
-                                }
-                            },
-                            # 7. Match responsibilities with domain terms
-                            {
-                                "nested": {
-                                    "path": "experiences",
-                                    "query": {
-                                        "match": {
-                                            "experiences.responsibilities": {
-                                                "query": " ".join(all_domain_terms),
-                                                "boost": 1.5
-                                            }
-                                        }
-                                    }
-                                }
                             }
                         ],
                         "minimum_should_match": 1,
                         "must_not": [
-                            # Filter out internships and student positions
                             {
                                 "match": {
                                     "job_title": {
@@ -786,29 +764,28 @@ class ElasticsearchService:  # Gardez le même nom pour compatibilité
                 "_source": ["id", "name", "email", "job_title", "hard_skills", "experiences"]
             }
 
-            # Execute the search
-            logger.info(f"Elasticsearch query: {query}")
+            # Execute search with timeout
             search_result = self.es.search(
                 index=self.index_name,
-                body=query
+                body=query,
+                timeout=30
             )
 
             total_hits = search_result["hits"]["total"]["value"] if "total" in search_result["hits"] else 0
             logger.info(f"Search returned {total_hits} total hits")
 
-            # Process results with improved match reason logic
+            # Process results
             candidates = []
             for hit in search_result["hits"]["hits"]:
                 source = hit["_source"]
                 score = hit["_score"]
                 
-                # Simple score normalization
+                # Score normalization
                 normalized_score = min(max(score / 8, min_score), 1.0)
 
-                # Improved match reason determination
+                # Determine match reason
                 match_reason = "Correspondance générale avec le profil"
                 
-                # Check for domain match in current job title
                 if source.get("job_title"):
                     job_title_lower = source.get("job_title", "").lower()
                     matching_domain_terms = [term for term in all_domain_terms 
@@ -819,7 +796,6 @@ class ElasticsearchService:  # Gardez le même nom pour compatibilité
                     elif any(term.lower() in job_title_lower for term in position_terms):
                         match_reason = f"Poste similaire: {source.get('job_title')}"
                 
-                # Check for domain match in skills
                 elif source.get("hard_skills"):
                     hard_skills = [skill.get("name", "").lower() for skill in source.get("hard_skills", [])]
                     domain_match = False
@@ -834,7 +810,6 @@ class ElasticsearchService:  # Gardez le même nom pour compatibilité
                     if not domain_match and competence_phare and any(competence_phare.lower() in skill for skill in hard_skills):
                         match_reason = f"Compétence clé: {competence_phare}"
                 
-                # Check for domain match in experience
                 elif "experiences" in source and source["experiences"]:
                     for exp in source["experiences"]:
                         exp_title = exp.get("job_title", "").lower()
