@@ -1,6 +1,4 @@
 import logging
-from elasticsearch import Elasticsearch, RequestError, TransportError, ConnectionError as ESConnectionError
-from elasticsearch.helpers import bulk
 from elasticsearch import ConnectionTimeout
 import time
 from datetime import datetime
@@ -8,67 +6,51 @@ from app.models.candidate import Candidate
 from app.models.job import Job
 from app.database.postgresql import SessionLocal
 import os
+from opensearchpy import OpenSearch, RequestError, TransportError, ConnectionError as OSConnectionError
+from opensearchpy.helpers import bulk
 
 # Configuration du logger
 logger = logging.getLogger(__name__)
 
-class ElasticsearchService:
+class ElasticsearchService:  # Gardez le même nom pour compatibilité
     def __init__(self, host=None):
         self.index_name = "candidates"
         self.es_available = True
         
-        # Configuration
+        # Configuration OpenSearch/Bonsai
         elasticsearch_url = host or os.getenv("ELASTICSEARCH_URL", "https://orelservices-search-7419791421.us-east-1.bonsaisearch.net:443")
         username = os.getenv("ELASTICSEARCH_USERNAME", "tgs5qdc5ph")
         password = os.getenv("ELASTICSEARCH_PASSWORD", "j5qcp06xrl")
         
-        # 🎯 SUPPRESSION DES VÉRIFICATIONS DE COMPATIBILITÉ
-        import warnings
-        from elasticsearch import ElasticsearchWarning
-        warnings.filterwarnings("ignore", category=ElasticsearchWarning)
-        
         try:
-            self.es = Elasticsearch(
+            # ✅ Client OpenSearch natif
+            self.es = OpenSearch(
                 hosts=[elasticsearch_url],
-                basic_auth=(username, password),
-                request_timeout=30,
-                retry_on_timeout=True,
+                http_auth=(username, password),  # Différent : http_auth au lieu de basic_auth
+                timeout=30,
                 max_retries=3,
-                verify_certs=False,  # Plus permissif
+                retry_on_timeout=True,
+                use_ssl=True,
+                verify_certs=True,
                 ssl_show_warn=False,
                 headers={'Content-Type': 'application/json'},
             )
             
-            # ✅ Test de connexion en ignorant les erreurs de distribution
-            try:
-                health = self.es.cluster.health()
-                logger.info(f"✅ Connected to search service, health: {health['status']}")
-                self.es_available = True
-                
-            except Exception as e:
-                error_msg = str(e).lower()
-                if "not a supported distribution" in error_msg:
-                    # L'erreur de distribution ne nous empêche pas d'utiliser le service
-                    logger.warning("⚠️  OpenSearch detected - continuing anyway...")
-                    try:
-                        # Test avec une requête simple pour vérifier que ça fonctionne
-                        health = self.es.cluster.health()
-                        logger.info(f"✅ Service functional despite warning, health: {health['status']}")
-                        self.es_available = True
-                    except Exception as health_error:
-                        logger.error(f"❌ Service not functional: {str(health_error)}")
-                        self.es_available = False
-                        self.es = self._create_dummy_es()
-                else:
-                    raise e
-                    
+            # Test de connexion
+            info = self.es.info()
+            logger.info(f"✅ Connected to OpenSearch: {info.get('version', {}).get('number', 'Unknown')} at {elasticsearch_url}")
+            
+            # Test de santé du cluster
+            health = self.es.cluster.health()
+            logger.info(f"Cluster health: {health['status']}")
+            
         except Exception as e:
-            logger.error(f"❌ Failed to connect: {str(e)}")
+            logger.error(f"❌ Failed to connect to OpenSearch: {str(e)}")
             self.es_available = False
             self.es = self._create_dummy_es()
     
     def _create_dummy_es(self):
-        """Crée un objet ES factice pour éviter les erreurs quand ES n'est pas disponible"""
+        """Crée un objet factice pour éviter les erreurs"""
         class DummyES:
             def __init__(self):
                 self.indices = DummyIndices()
