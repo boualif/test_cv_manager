@@ -26,7 +26,7 @@ def fix_elasticsearch_cluster():
     
     # Try to connect to Elasticsearch and check health
     try:
-        es_service = ElasticsearchService(host="http://localhost:9200")
+        es_service = ElasticsearchService()
         health = es_service.es.cluster.health(request_timeout=30)
         
         if health['status'] == 'red':
@@ -70,7 +70,7 @@ def fix_elasticsearch_cluster():
                             time.sleep(20)
                             
                             # Try to connect again
-                            es_service = ElasticsearchService(host="http://localhost:9200")
+                            es_service = ElasticsearchService()
                             health = es_service.es.cluster.health(request_timeout=30)
                             logger.info(f"Cluster health after restart: {health['status']}")
                         except Exception as e:
