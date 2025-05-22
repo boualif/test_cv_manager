@@ -15,93 +15,78 @@ logger = logging.getLogger(__name__)
 class ElasticsearchService:
     def __init__(self, host=None):
         self.index_name = "candidates"
-        self.es_available = True  # Flag to track if ES is available
+        self.es_available = True
         
-        # Use provided host or get from environment variable
+        # CORRECTION : Utiliser l'URL complète avec le protocole
         elasticsearch_url = host or os.getenv("ELASTICSEARCH_URL", "https://orelservices-search-7419791421.us-east-1.bonsaisearch.net:443")
         username = os.getenv("ELASTICSEARCH_USERNAME", "tgs5qdc5ph")
         password = os.getenv("ELASTICSEARCH_PASSWORD", "j5qcp06xrl")
         
         try:
-            # Initialize Elasticsearch client with Bonsai compatibility settings
+            # CORRECTION : Configuration améliorée pour Bonsai
             self.es = Elasticsearch(
                 hosts=[elasticsearch_url],
                 basic_auth=(username, password),
                 request_timeout=30,
                 retry_on_timeout=True,
                 max_retries=3,
-                verify_certs=False,  # Disable cert verification for compatibility
-                ssl_show_warn=False,  # Disable SSL warnings
-                # Add compatibility options for OpenSearch
+                verify_certs=True,  # CHANGÉ : Active la vérification SSL pour Bonsai
+                ssl_show_warn=False,
+                # CORRECTION : Headers pour compatibilité
                 headers={'Content-Type': 'application/json'},
-                ca_certs=False  # Disable CA validation
+                # SUPPRIMÉ : ca_certs=False (pas recommandé pour production)
             )
             
-            # Verify connection
+            # Test de connexion
             info = self.es.info()
-            logger.info(f"Connected to Elasticsearch: {info['version']['number']} at {elasticsearch_url}")
+            logger.info(f"Connected to Elasticsearch: {info.get('version', {}).get('number', 'Unknown')} at {elasticsearch_url}")
             
-            # Check cluster health
+            # Vérification de la santé du cluster
             health = self.es.cluster.health()
             logger.info(f"Cluster health: {health['status']}")
-            if health['status'] == 'red':
-                logger.warning("Cluster health is RED. This may cause indexing failures.")
-                self._attempt_cluster_recovery()
-        except TransportError as te:
-            logger.error(f"Transport error during connection check: {str(te)}")
-            error_info = getattr(te, 'info', None)
-            status_code = getattr(te, 'status_code', None)
-            if status_code:
-                logger.error(f"Status code: {status_code}, Info: {error_info}")
-            self.es_available = False  # Mark ES as unavailable
-            logger.warning("Elasticsearch will be disabled due to connection issues. Search functionality will be limited.")
-        except ESConnectionError as ce:
-            logger.error(f"Connection error: {str(ce)}")
-            self.es_available = False  # Mark ES as unavailable
-            logger.warning("Elasticsearch will be disabled due to connection issues. Search functionality will be limited.")
+            
         except Exception as e:
-            logger.error(f"Unexpected error connecting to Elasticsearch: {str(e)}")
-            logger.warning("Elasticsearch will be disabled due to connection issues. Search functionality will be limited.")
-            self.es_available = False  # Mark ES as unavailable
+            logger.error(f"Failed to connect to Elasticsearch: {str(e)}")
+            self.es_available = False
+            logger.warning("Elasticsearch will be disabled due to connection issues.")
             
-            # Create a dummy ES object for compatibility
-            # In your __init__ method, replace the DummyES implementation with this:
-            class DummyES:
-                def __init__(self):
-                    self.indices = DummyIndices()
-                    self.cluster = DummyCluster()
-                    
-                def index(self, *args, **kwargs):
-                    return {"result": "created", "_id": "dummy-id"}
-                    
-                def search(self, *args, **kwargs):
-                    return {"hits": {"total": {"value": 0}, "hits": []}}
-                    
-                def get(self, *args, **kwargs):
-                    return {"_id": "dummy-id", "_source": {}}
+            # Classe dummy pour éviter les erreurs
+            self.es = self._create_dummy_es()
+    
+    def _create_dummy_es(self):
+        """Crée un objet ES factice pour éviter les erreurs quand ES n'est pas disponible"""
+        class DummyES:
+            def __init__(self):
+                self.indices = DummyIndices()
+                self.cluster = DummyCluster()
+                
+            def index(self, *args, **kwargs):
+                return {"result": "created", "_id": "dummy-id"}
+                
+            def search(self, *args, **kwargs):
+                return {"hits": {"total": {"value": 0}, "hits": []}}
+                
+            def get(self, *args, **kwargs):
+                return {"_id": "dummy-id", "_source": {}}
             
-            class DummyIndices:
-                def exists(self, *args, **kwargs):
-                    return False
-                    
-                def create(self, *args, **kwargs):
-                    return {"acknowledged": True}
-                    
-                def delete(self, *args, **kwargs):
-                    return {"acknowledged": True}
-                    
-                def get(self, *args, **kwargs):
-                    return {}
-                    
-                def stats(self, *args, **kwargs):
-                    return {"_all": {"primaries": {"docs": {"count": 0}, "store": {"size_in_bytes": 0}}}}
-            
-            class DummyCluster:
-                def health(self, *args, **kwargs):
-                    return {"status": "yellow", "number_of_nodes": 1, "unassigned_shards": 0}
-            
-            # Then assign this correctly:
-            self.es = DummyES()
+            def info(self):
+                return {"version": {"number": "dummy"}}
+        
+        class DummyIndices:
+            def exists(self, *args, **kwargs):
+                return False
+                
+            def create(self, *args, **kwargs):
+                return {"acknowledged": True}
+                
+            def delete(self, *args, **kwargs):
+                return {"acknowledged": True}
+        
+        class DummyCluster:
+            def health(self, *args, **kwargs):
+                return {"status": "yellow", "number_of_nodes": 1}
+        
+        return DummyES()
 
     # Rest of the class remains unchanged
     def _attempt_cluster_recovery(self):
