@@ -18,3 +18,6 @@ requests==2.32.3
 python-multipart==0.0.12
 urllib3>=1.26.7,<2.0.0  # Compatible with elasticsearch 7.x
 opensearch-py==2.4.2
+python-docx==0.8.11
+python-magic-bin==0.4.14
+docx2pdf==0.2.4
