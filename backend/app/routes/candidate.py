@@ -129,7 +129,7 @@ async def reindex_recent_candidates(
             return {"message": "No recent candidates found", "reindexed_count": 0}
         
         # Create ES service
-        es_service = ElasticsearchService(host="http://localhost:9200")
+        es_service = ElasticsearchService()
         
         # Schedule background tasks for each candidate
         candidate_ids = []
@@ -155,7 +155,7 @@ async def get_elasticsearch_status(
 ):
     """Get Elasticsearch status and candidate counts."""
     try:
-        es_service = ElasticsearchService(host="http://localhost:9200")
+        es_service = ElasticsearchService()
         
         # Get cluster health
         health = es_service.es.cluster.health(request_timeout=10)
@@ -342,7 +342,7 @@ async def post_cv(
 
     # Create Elasticsearch service instance once
     try:
-        es_service = ElasticsearchService(host="http://localhost:9200")
+        es_service = ElasticsearchService()
         health = es_service.es.cluster.health(request_timeout=5)
         es_available = health['status'] != 'red'
         if not es_available:
@@ -629,7 +629,7 @@ async def update_candidate(
     ).filter(Candidate.id == candidate_id).first()
     
     # Schedule automatic re-indexing
-    es_service = ElasticsearchService(host="http://localhost:9200")
+    es_service = ElasticsearchService()
     background_tasks.add_task(index_candidate_background, candidate_with_relations, es_service)
     
     # Log activity
@@ -709,7 +709,7 @@ async def update_candidate_resume(
     ).filter(Candidate.id == candidate_id).first()
     
     # Schedule automatic re-indexing
-    es_service = ElasticsearchService(host="http://localhost:9200")
+    es_service = ElasticsearchService()
     background_tasks.add_task(index_candidate_background, candidate_with_relations, es_service)
     
     # Log activity
