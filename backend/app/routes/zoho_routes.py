@@ -1,4 +1,4 @@
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, HTTPException, Query, Depends  # ← Ajout de Depends
 from fastapi.responses import RedirectResponse
 from typing import List, Optional
 import logging
@@ -9,6 +9,12 @@ from datetime import datetime, timedelta
 
 # Import du service d'authentification
 from app.services.zoho_auth_service import zoho_service
+
+# IMPORTS MANQUANTS AJOUTÉS :
+from sqlalchemy.orm import Session
+from app.database.postgresql import get_db
+from app.models.job import Job
+from app.models.user import User
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
