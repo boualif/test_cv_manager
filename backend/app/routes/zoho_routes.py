@@ -402,7 +402,77 @@ async def sync_existing_job(job_id: int):
     except Exception as e:
         logger.error(f"Erreur lors de la récupération du job {job_id}: {e}")
         raise HTTPException(status_code=500, detail=f"Erreur: {str(e)}")
-
+@router.get("/sync/from-crm")
+async def sync_jobs_from_crm(
+    db: Session = Depends(get_db),
+    limit: int = Query(10, description="Nombre maximum de jobs à synchroniser")
+):
+    """Synchronisation manuelle: récupérer les jobs depuis Zoho CRM"""
+    try:
+        # Récupérer les deals récents depuis Zoho
+        response = await make_zoho_api_request_persistent(
+            'GET', 
+            f'Deals?fields=id,Deal_Name,Job_Title,Job_Description,Requirements,Job_Type,Location,Department,Salary_Range,Source,Created_Time&per_page={limit}&sort_order=desc&sort_by=Created_Time'
+        )
+        
+        deals = response.get('data', [])
+        synced_jobs = []
+        
+        for deal in deals:
+            try:
+                # Ignorer les jobs créés par notre app (pour éviter les boucles)
+                if deal.get('Source') == 'Job Matching App':
+                    continue
+                
+                # Extraire le titre du job
+                title = deal.get('Job_Title') or deal.get('Deal_Name', '').replace('Job Opening: ', '')
+                
+                # Vérifier si le job existe déjà dans notre app
+                existing_job = db.query(Job).filter(Job.title == title).first()
+                if existing_job:
+                    continue
+                
+                # Trouver un utilisateur admin pour créer le job
+                admin_user = db.query(User).filter(User.role == "ADMIN").first()
+                if not admin_user:
+                    logger.error("❌ No admin user found")
+                    continue
+                
+                # Créer le nouveau job dans notre app
+                new_job = Job(
+                    title=title,
+                    description=deal.get('Job_Description', ''),
+                    competence_phare=deal.get('Requirements', ''),
+                    job_type_etiquette=deal.get('Job_Type', 'technique'),
+                    created_by_id=admin_user.id
+                )
+                
+                db.add(new_job)
+                db.commit()
+                db.refresh(new_job)
+                
+                synced_jobs.append({
+                    "app_job_id": new_job.id,
+                    "title": new_job.title,
+                    "zoho_deal_id": deal.get('id')
+                })
+                
+                logger.info(f"✅ Synced job '{new_job.title}' from CRM")
+                
+            except Exception as e:
+                logger.error(f"❌ Error syncing deal {deal.get('id')}: {e}")
+                continue
+        
+        return {
+            "success": True,
+            "message": f"Synchronized {len(synced_jobs)} jobs from Zoho CRM",
+            "synced_jobs": synced_jobs,
+            "total_deals_found": len(deals)
+        }
+        
+    except Exception as e:
+        logger.error(f"❌ CRM sync failed: {e}")
+        raise HTTPException(status_code=500, detail=f"CRM sync failed: {str(e)}")
 @router.get("/jobs/test-sync/{job_id}")
 async def test_sync_job(job_id: int):
     """Tester la synchronisation d'un job sans l'envoyer à Zoho"""
