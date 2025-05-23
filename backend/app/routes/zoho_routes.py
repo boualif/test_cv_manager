@@ -7,13 +7,133 @@ import aiohttp
 import json
 from datetime import datetime, timedelta
 
+# Import du service d'authentification
+from app.services.zoho_auth_service import zoho_service
+
 logger = logging.getLogger(__name__)
 router = APIRouter()
 
-# Simple token storage (in production, use database)
-access_token = None
-refresh_token = None
-token_expires_at = None
+# Stockage persistant amélioré des tokens
+TOKEN_STORAGE = {
+    "access_token": None,
+    "refresh_token": None,
+    "expires_at": None,
+    "last_updated": None
+}
+
+async def ensure_valid_token():
+    """Assurer qu'on a un token valide, avec refresh automatique"""
+    try:
+        # Vérifier si on a un token
+        if not TOKEN_STORAGE["access_token"]:
+            logger.warning("❌ No access token available")
+            return None
+        
+        # Vérifier si le token a expiré
+        if TOKEN_STORAGE["expires_at"]:
+            expires_at = datetime.fromisoformat(TOKEN_STORAGE["expires_at"])
+            # Refresh 5 minutes avant expiration
+            if datetime.now() >= (expires_at - timedelta(minutes=5)):
+                logger.info("🔄 Token expires soon, attempting refresh...")
+                success = await refresh_stored_token()
+                if not success:
+                    logger.error("❌ Failed to refresh token")
+                    return None
+        
+        return TOKEN_STORAGE["access_token"]
+        
+    except Exception as e:
+        logger.error(f"Error ensuring valid token: {e}")
+        return None
+
+async def refresh_stored_token():
+    """Rafraîchir le token stocké"""
+    try:
+        if not TOKEN_STORAGE["refresh_token"]:
+            logger.error("❌ No refresh token available")
+            return False
+        
+        # Utiliser le service d'authentification existant
+        zoho_service.refresh_token = TOKEN_STORAGE["refresh_token"]
+        await zoho_service.refresh_access_token()
+        
+        # Mettre à jour le stockage
+        TOKEN_STORAGE["access_token"] = zoho_service.access_token
+        TOKEN_STORAGE["refresh_token"] = zoho_service.refresh_token
+        TOKEN_STORAGE["expires_at"] = zoho_service.token_expires_at.isoformat() if zoho_service.token_expires_at else None
+        TOKEN_STORAGE["last_updated"] = datetime.now().isoformat()
+        
+        logger.info("✅ Token refreshed successfully")
+        return True
+        
+    except Exception as e:
+        logger.error(f"❌ Token refresh failed: {e}")
+        return False
+
+async def make_zoho_api_request_persistent(method: str, endpoint: str, data: dict = None):
+    """Version améliorée avec gestion automatique des tokens"""
+    max_retries = 2
+    
+    for attempt in range(max_retries):
+        try:
+            # Assurer qu'on a un token valide
+            token = await ensure_valid_token()
+            if not token:
+                if attempt == 0:
+                    logger.warning("🔄 No valid token, attempting refresh...")
+                    await refresh_stored_token()
+                    continue
+                else:
+                    raise HTTPException(
+                        status_code=401, 
+                        detail="Zoho authentication required. Please re-authenticate via /api/zoho/auth/login"
+                    )
+            
+            headers = {
+                'Authorization': f'Zoho-oauthtoken {token}',
+                'Content-Type': 'application/json'
+            }
+            
+            url = f"https://www.zohoapis.com/crm/v2/{endpoint}"
+            
+            async with aiohttp.ClientSession() as session:
+                if method.upper() == 'GET':
+                    async with session.get(url, headers=headers) as response:
+                        return await handle_zoho_response(response)
+                elif method.upper() == 'POST':
+                    async with session.post(url, headers=headers, json=data) as response:
+                        return await handle_zoho_response(response)
+                elif method.upper() == 'PUT':
+                    async with session.put(url, headers=headers, json=data) as response:
+                        return await handle_zoho_response(response)
+                        
+        except HTTPException as e:
+            if e.status_code == 401 and attempt == 0:
+                logger.warning("🔄 Token expired during request, invalidating and retrying...")
+                # Invalider le token actuel et retry
+                TOKEN_STORAGE["access_token"] = None
+                continue
+            else:
+                raise
+        except Exception as e:
+            logger.error(f"❌ Request failed: {e}")
+            if attempt == max_retries - 1:
+                raise HTTPException(status_code=500, detail=f"Request failed: {str(e)}")
+            continue
+    
+    raise HTTPException(status_code=500, detail="Max retries exceeded")
+
+async def handle_zoho_response(response):
+    """Handle Zoho API response"""
+    if response.status in [200, 201]:
+        return await response.json()
+    elif response.status == 401:
+        # Token expiré - sera géré par la logique de retry
+        raise HTTPException(status_code=401, detail="Token expired")
+    else:
+        error_text = await response.text()
+        logger.error(f"❌ Zoho API error: {response.status} - {error_text}")
+        raise HTTPException(status_code=response.status, detail=f"Zoho API error: {error_text}")
 
 @router.get("/test")
 async def test_zoho():
@@ -27,8 +147,9 @@ async def test_zoho():
             "scope": os.getenv('ZOHO_SCOPE')
         },
         "auth_status": {
-            "has_access_token": bool(access_token),
-            "token_expires_at": token_expires_at.isoformat() if token_expires_at else None
+            "has_access_token": bool(TOKEN_STORAGE["access_token"]),
+            "token_expires_at": TOKEN_STORAGE.get("expires_at"),
+            "last_updated": TOKEN_STORAGE.get("last_updated")
         }
     }
 
@@ -36,131 +157,55 @@ async def test_zoho():
 async def initiate_zoho_auth():
     """Initiate Zoho OAuth flow"""
     try:
-        client_id = os.getenv('ZOHO_CLIENT_ID')
-        redirect_uri = os.getenv('ZOHO_REDIRECT_URI')
-        scope = os.getenv('ZOHO_SCOPE')
-        
-        if not all([client_id, redirect_uri, scope]):
-            missing_vars = []
-            if not client_id:
-                missing_vars.append('ZOHO_CLIENT_ID')
-            if not redirect_uri:
-                missing_vars.append('ZOHO_REDIRECT_URI')
-            if not scope:
-                missing_vars.append('ZOHO_SCOPE')
-            
-            raise HTTPException(
-                status_code=500, 
-                detail=f"Missing environment variables: {', '.join(missing_vars)}"
-            )
-        
-        # Generate auth URL
-        auth_url = f"https://accounts.zoho.com/oauth/v2/auth?scope={scope}&client_id={client_id}&response_type=code&redirect_uri={redirect_uri}&access_type=offline"
-        
+        auth_url = zoho_service.get_authorization_url()
         return {"auth_url": auth_url}
-        
     except Exception as e:
         logger.error(f"Error initiating Zoho auth: {e}")
         raise HTTPException(status_code=500, detail=f"Failed to initiate authentication: {str(e)}")
 
 @router.get("/auth/callback")
 async def zoho_auth_callback(code: str = Query(...)):
-    """Handle Zoho OAuth callback and exchange code for tokens"""
-    global access_token, refresh_token, token_expires_at
-    
+    """Handle Zoho OAuth callback with persistent storage"""
     try:
-        client_id = os.getenv('ZOHO_CLIENT_ID')
-        client_secret = os.getenv('ZOHO_CLIENT_SECRET')
-        redirect_uri = os.getenv('ZOHO_REDIRECT_URI')
+        # Utiliser le service d'authentification existant
+        token_data = await zoho_service.exchange_code_for_tokens(code)
         
-        # Exchange code for tokens
-        async with aiohttp.ClientSession() as session:
-            data = {
-                'grant_type': 'authorization_code',
-                'client_id': client_id,
-                'client_secret': client_secret,
-                'redirect_uri': redirect_uri,
-                'code': code
-            }
-            
-            async with session.post('https://accounts.zoho.com/oauth/v2/token', data=data) as response:
-                if response.status == 200:
-                    token_data = await response.json()
-                    access_token = token_data['access_token']
-                    refresh_token = token_data.get('refresh_token')
-                    expires_in = token_data.get('expires_in', 3600)
-                    token_expires_at = datetime.now() + timedelta(seconds=expires_in)
-                    
-                    logger.info("Successfully obtained Zoho access token")
-                    
-                    # Redirect to frontend with success
-                    return RedirectResponse(
-                        url="https://test-cv-front.onrender.com?zoho_auth=success",
-                        status_code=302
-                    )
-                else:
-                    error_text = await response.text()
-                    logger.error(f"Token exchange failed: {error_text}")
-                    return RedirectResponse(
-                        url="https://test-cv-front.onrender.com?zoho_auth=error",
-                        status_code=302
-                    )
-                    
+        # Stocker dans le système persistant
+        TOKEN_STORAGE["access_token"] = zoho_service.access_token
+        TOKEN_STORAGE["refresh_token"] = zoho_service.refresh_token
+        TOKEN_STORAGE["expires_at"] = zoho_service.token_expires_at.isoformat() if zoho_service.token_expires_at else None
+        TOKEN_STORAGE["last_updated"] = datetime.now().isoformat()
+        
+        logger.info("✅ Zoho authentication successful with persistent storage")
+        
+        # Redirect to frontend with success
+        return RedirectResponse(
+            url="https://test-cv-front.onrender.com?zoho_auth=success",
+            status_code=302
+        )
     except Exception as e:
-        logger.error(f"Error in OAuth callback: {e}")
+        logger.error(f"❌ Error in OAuth callback: {e}")
         return RedirectResponse(
             url="https://test-cv-front.onrender.com?zoho_auth=error",
             status_code=302
         )
 
-async def make_zoho_api_request(method: str, endpoint: str, data: dict = None):
-    """Make authenticated API request to Zoho CRM"""
-    global access_token
-    
-    if not access_token:
-        raise HTTPException(status_code=401, detail="Not authenticated with Zoho CRM")
-    
-    headers = {
-        'Authorization': f'Zoho-oauthtoken {access_token}',
-        'Content-Type': 'application/json'
-    }
-    
-    url = f"https://www.zohoapis.com/crm/v2/{endpoint}"
-    
-    async with aiohttp.ClientSession() as session:
-        if method.upper() == 'GET':
-            async with session.get(url, headers=headers) as response:
-                return await handle_zoho_response(response)
-        elif method.upper() == 'POST':
-            async with session.post(url, headers=headers, json=data) as response:
-                return await handle_zoho_response(response)
-        elif method.upper() == 'PUT':
-            async with session.put(url, headers=headers, json=data) as response:
-                return await handle_zoho_response(response)
-
-async def handle_zoho_response(response):
-    """Handle Zoho API response"""
-    if response.status in [200, 201]:
-        return await response.json()
-    else:
-        error_text = await response.text()
-        logger.error(f"Zoho API error: {response.status} - {error_text}")
-        raise HTTPException(status_code=response.status, detail=f"Zoho API error: {error_text}")
-
 @router.get("/connection/status")
 async def check_connection_status():
-    """Check if Zoho CRM connection is active"""
+    """Check if Zoho CRM connection is active with persistent token management"""
     try:
-        if not access_token:
+        token = await ensure_valid_token()
+        
+        if not token:
             return {
                 "connected": False,
                 "status": "not_authenticated",
-                "message": "No access token available"
+                "message": "No valid token available. Please authenticate.",
+                "auth_url": "/api/zoho/auth/login"
             }
         
-        # Try to make a simple API call to test connection
-        response = await make_zoho_api_request('GET', 'users?type=CurrentUser')
-        
+        # Tester la connexion
+        response = await make_zoho_api_request_persistent('GET', 'users?type=CurrentUser')
         user_info = response.get('users', [{}])[0] if response.get('users') else {}
         
         return {
@@ -171,18 +216,20 @@ async def check_connection_status():
                 "email": user_info.get('email'),
                 "role": user_info.get('role', {}).get('name')
             },
-            "token_expires_at": token_expires_at.isoformat() if token_expires_at else None
+            "token_expires_at": TOKEN_STORAGE.get("expires_at"),
+            "last_updated": TOKEN_STORAGE.get("last_updated")
         }
     except Exception as e:
         return {
             "connected": False,
             "error": str(e),
-            "status": "error"
+            "status": "error",
+            "auth_url": "/api/zoho/auth/login"
         }
 
 @router.post("/contacts/create")
 async def create_contact(contact_data: dict):
-    """Create a new contact in Zoho CRM"""
+    """Create a new contact in Zoho CRM with persistent authentication"""
     try:
         # Format contact data for Zoho
         zoho_contact = {
@@ -204,7 +251,7 @@ async def create_contact(contact_data: dict):
         zoho_contact = {k: v for k, v in zoho_contact.items() if v is not None and v != ''}
         
         create_data = {"data": [zoho_contact]}
-        response = await make_zoho_api_request('POST', 'Contacts', create_data)
+        response = await make_zoho_api_request_persistent('POST', 'Contacts', create_data)
         
         if response.get('data') and len(response['data']) > 0:
             contact_id = response['data'][0]['details']['id']
@@ -227,9 +274,9 @@ async def create_contact(contact_data: dict):
 
 @router.get("/contacts/search")
 async def search_contacts(email: str = Query(...)):
-    """Search for contacts by email"""
+    """Search for contacts by email with persistent authentication"""
     try:
-        response = await make_zoho_api_request('GET', f'Contacts/search?criteria=Email:equals:{email}')
+        response = await make_zoho_api_request_persistent('GET', f'Contacts/search?criteria=Email:equals:{email}')
         
         contacts = response.get('data', [])
         
@@ -250,18 +297,19 @@ async def search_contacts(email: str = Query(...)):
 
 @router.post("/jobs/create")
 async def create_job(job_data: dict):
-    """Create a job record in Zoho CRM (as a Deal)"""
+    """Create a job record in Zoho CRM with persistent authentication"""
     try:
-        # Format job data for Zoho
+        # Format job data for Zoho avec mapping amélioré
         zoho_job = {
             "Deal_Name": f"Job Opening: {job_data.get('title', 'Untitled')}",
             "Job_Title": job_data.get('title', ''),
             "Job_Description": job_data.get('description', ''),
-            "Requirements": ', '.join(job_data.get('requirements', [])),
-            "Location": job_data.get('location', ''),
+            "Requirements": ', '.join(job_data.get('requirements', [])) if job_data.get('requirements') else job_data.get('competence_phare', ''),
+            "Location": job_data.get('location', 'Tunisia'),
             "Salary_Range": job_data.get('salary_range', ''),
-            "Department": job_data.get('department', ''),
+            "Department": job_data.get('department', 'Engineering'),
             "Job_ID": job_data.get('job_id', f"job_{datetime.now().strftime('%Y%m%d_%H%M%S')}"),
+            "Job_Type": job_data.get('job_type_etiquette', 'technique'),
             "Stage": "Open",
             "Source": "Job Matching App",
             "Created_Date": datetime.now().isoformat()
@@ -271,23 +319,122 @@ async def create_job(job_data: dict):
         zoho_job = {k: v for k, v in zoho_job.items() if v is not None and v != ''}
         
         create_data = {"data": [zoho_job]}
-        response = await make_zoho_api_request('POST', 'Deals', create_data)
+        response = await make_zoho_api_request_persistent('POST', 'Deals', create_data)
         
         if response.get('data') and len(response['data']) > 0:
             job_id = response['data'][0]['details']['id']
             return {
                 "success": True,
-                "message": "Job created successfully",
+                "message": "Job created successfully in Zoho CRM",
                 "job_id": job_id,
                 "zoho_response": response
             }
         else:
             return {
                 "success": False,
-                "message": "Failed to create job",
+                "message": "Failed to create job in Zoho CRM",
                 "zoho_response": response
             }
             
     except Exception as e:
-        logger.error(f"Error creating job: {e}")
+        logger.error(f"❌ Error creating job in Zoho: {e}")
         raise HTTPException(status_code=500, detail=f"Failed to create job: {str(e)}")
+
+@router.post("/jobs/sync-from-app")
+async def sync_job_from_app(job_data: dict):
+    """Synchroniser un job depuis votre app vers Zoho CRM avec le bon mapping"""
+    try:
+        # Mapping adapté à votre structure d'app
+        zoho_job = {
+            "Deal_Name": f"Job Opening: {job_data.get('title', 'Sans titre')}",
+            "Job_Title": job_data.get('title', ''),
+            "Job_Description": job_data.get('description', ''),
+            "Requirements": job_data.get('competence_phare', ''),  # Compétence principale
+            "Job_Type": job_data.get('job_type_etiquette', ''),    # technique/commercial
+            "Stage": "Open",
+            "Source": "Job Matching App",
+            "Created_Date": datetime.now().isoformat(),
+            "App_Job_ID": str(job_data.get('id', ''))  # ID de votre app
+        }
+        
+        # Nettoyer les valeurs vides
+        zoho_job = {k: v for k, v in zoho_job.items() if v is not None and v != ''}
+        
+        create_data = {"data": [zoho_job]}
+        response = await make_zoho_api_request_persistent('POST', 'Deals', create_data)
+        
+        if response.get('data') and len(response['data']) > 0:
+            zoho_job_id = response['data'][0]['details']['id']
+            return {
+                "success": True,
+                "message": f"Job '{job_data.get('title')}' synchronisé avec succès",
+                "zoho_job_id": zoho_job_id,
+                "app_job_id": job_data.get('id'),
+                "zoho_response": response
+            }
+        else:
+            return {
+                "success": False,
+                "message": "Échec de la synchronisation",
+                "zoho_response": response
+            }
+            
+    except Exception as e:
+        logger.error(f"Erreur lors de la synchronisation: {e}")
+        raise HTTPException(status_code=500, detail=f"Erreur de synchronisation: {str(e)}")
+
+@router.post("/jobs/sync-existing/{job_id}")
+async def sync_existing_job(job_id: int):
+    """Synchroniser un job existant de votre app vers Zoho"""
+    try:
+        # Récupérer le job depuis votre API
+        async with aiohttp.ClientSession() as session:
+            async with session.get(f"https://test-cv-manager.onrender.com/api/jobs/{job_id}") as response:
+                if response.status == 200:
+                    job_data = await response.json()
+                    
+                    # Synchroniser avec le bon mapping
+                    sync_result = await sync_job_from_app(job_data)
+                    return sync_result
+                else:
+                    raise HTTPException(status_code=404, detail=f"Job {job_id} non trouvé dans votre app")
+                    
+    except Exception as e:
+        logger.error(f"Erreur lors de la récupération du job {job_id}: {e}")
+        raise HTTPException(status_code=500, detail=f"Erreur: {str(e)}")
+
+@router.get("/jobs/test-sync/{job_id}")
+async def test_sync_job(job_id: int):
+    """Tester la synchronisation d'un job sans l'envoyer à Zoho"""
+    try:
+        # Récupérer le job depuis votre API
+        async with aiohttp.ClientSession() as session:
+            async with session.get(f"https://test-cv-manager.onrender.com/api/jobs/{job_id}") as response:
+                if response.status == 200:
+                    job_data = await response.json()
+                    
+                    # Montrer le mapping sans envoyer
+                    zoho_job = {
+                        "Deal_Name": f"Job Opening: {job_data.get('title', 'Sans titre')}",
+                        "Job_Title": job_data.get('title', ''),
+                        "Job_Description": job_data.get('description', ''),
+                        "Requirements": job_data.get('competence_phare', ''),
+                        "Job_Type": job_data.get('job_type_etiquette', ''),
+                        "Stage": "Open",
+                        "Source": "Job Matching App",
+                        "Created_Date": datetime.now().isoformat(),
+                        "App_Job_ID": str(job_data.get('id', ''))
+                    }
+                    
+                    return {
+                        "success": True,
+                        "message": "Aperçu du mapping (non envoyé à Zoho)",
+                        "original_job": job_data,
+                        "zoho_mapping": zoho_job
+                    }
+                else:
+                    raise HTTPException(status_code=404, detail=f"Job {job_id} non trouvé")
+                    
+    except Exception as e:
+        logger.error(f"Erreur lors du test: {e}")
+        raise HTTPException(status_code=500, detail=f"Erreur: {str(e)}")
