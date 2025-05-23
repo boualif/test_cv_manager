@@ -23,6 +23,77 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+# 🚀 NEW: Zoho Auto-Sync Scheduler
+class ZohoSyncScheduler:
+    def __init__(self):
+        self.is_running = False
+        self.sync_interval = 300  # 5 minutes
+        self.last_sync = None
+        
+    async def start_auto_sync(self):
+        """Start the automatic synchronization scheduler"""
+        if self.is_running:
+            logger.info("Zoho sync scheduler already running")
+            return
+            
+        self.is_running = True
+        logger.info("🚀 Starting Zoho CRM auto-sync scheduler (every 5 minutes)")
+        
+        # Wait 30 seconds before first sync to let the app fully start
+        await asyncio.sleep(30)
+        
+        while self.is_running:
+            try:
+                await self.perform_sync()
+                await asyncio.sleep(self.sync_interval)
+            except Exception as e:
+                logger.error(f"❌ Auto-sync error: {e}")
+                await asyncio.sleep(60)  # Wait 1 minute before retry
+    
+    def stop_auto_sync(self):
+        """Stop the automatic synchronization"""
+        self.is_running = False
+        logger.info("🛑 Stopping Zoho CRM auto-sync scheduler")
+    
+    async def perform_sync(self):
+        """Perform the actual synchronization"""
+        try:
+            import aiohttp
+            from datetime import datetime
+            
+            logger.info("🔄 Auto-sync: Checking for new jobs in Zoho CRM...")
+            
+            async with aiohttp.ClientSession() as session:
+                # Call your existing sync endpoint
+                async with session.get(
+                    "https://test-cv-manager.onrender.com/api/zoho/sync/from-crm?limit=10",
+                    timeout=aiohttp.ClientTimeout(total=30)
+                ) as response:
+                    if response.status == 200:
+                        result = await response.json()
+                        synced_count = len(result.get('synced_jobs', []))
+                        
+                        if synced_count > 0:
+                            logger.info(f"✅ Auto-sync: {synced_count} new jobs synced from CRM")
+                            # Optionally log the job titles
+                            for job in result.get('synced_jobs', []):
+                                logger.info(f"   - Synced: {job.get('title')}")
+                        else:
+                            logger.info("ℹ️ Auto-sync: No new jobs to sync")
+                            
+                        self.last_sync = datetime.now()
+                        return result
+                    else:
+                        error_text = await response.text()
+                        logger.error(f"❌ Auto-sync failed: {response.status} - {error_text}")
+                        
+        except Exception as e:
+            logger.error(f"❌ Auto-sync error: {e}")
+            return None
+
+# Global scheduler instance
+zoho_scheduler = ZohoSyncScheduler()
+
 # Add the Elasticsearch startup function
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -36,10 +107,19 @@ async def lifespan(app: FastAPI):
     # Initialize Elasticsearch and create index if needed
     await ensure_elasticsearch_ready()
     
+    # 🚀 NEW: Start Zoho auto-sync if integration is available
+    if ZOHO_INTEGRATION_AVAILABLE:
+        logger.info("🔄 Starting Zoho CRM auto-synchronization...")
+        asyncio.create_task(zoho_scheduler.start_auto_sync())
+    else:
+        logger.info("Zoho integration not available - skipping auto-sync")
+    
     yield
     
     # Shutdown
     logger.info("Shutting down application...")
+    # Stop auto-sync on shutdown
+    zoho_scheduler.stop_auto_sync()
 
 # Function to create admin user
 def create_admin_user():
@@ -151,13 +231,14 @@ from app.routes import users , candidate ,dashboards,job
 from app.models.user import UserActivity
 
 # Import Zoho CRM routes
+ZOHO_INTEGRATION_AVAILABLE = False
 try:
     from app.routes.zoho_routes import router as zoho_router
     ZOHO_INTEGRATION_AVAILABLE = True
-    logger.info("Zoho CRM integration loaded successfully")
+    logger.info("✅ Zoho CRM integration loaded successfully")
 except ImportError as e:
     ZOHO_INTEGRATION_AVAILABLE = False
-    logger.warning(f"Zoho CRM integration not available: {e}")
+    logger.warning(f"❌ Zoho CRM integration not available: {e}")
 
 # Create tables if they don't exist
 Base.metadata.create_all(bind=engine)
@@ -171,7 +252,64 @@ app.include_router(dashboards.router, prefix="/api/dashboards", tags=["dashboard
 # Include Zoho CRM router if available
 if ZOHO_INTEGRATION_AVAILABLE:
     app.include_router(zoho_router, prefix="/api/zoho", tags=["zoho-crm"])
-    logger.info("Zoho CRM routes registered successfully")
+    logger.info("✅ Zoho CRM routes registered successfully")
+
+# 🚀 NEW: Zoho Sync Control Endpoints
+@app.get("/api/zoho/sync/auto/status", tags=["zoho-sync"])
+async def get_auto_sync_status():
+    """Get the status of automatic Zoho synchronization"""
+    if not ZOHO_INTEGRATION_AVAILABLE:
+        return {"error": "Zoho integration not available"}
+    
+    return {
+        "is_running": zoho_scheduler.is_running,
+        "last_sync": zoho_scheduler.last_sync.isoformat() if zoho_scheduler.last_sync else None,
+        "sync_interval_seconds": zoho_scheduler.sync_interval,
+        "sync_interval_minutes": zoho_scheduler.sync_interval // 60,
+        "zoho_integration_available": ZOHO_INTEGRATION_AVAILABLE
+    }
+
+@app.post("/api/zoho/sync/auto/restart", tags=["zoho-sync"])
+async def restart_auto_sync():
+    """Restart the automatic Zoho synchronization"""
+    if not ZOHO_INTEGRATION_AVAILABLE:
+        raise HTTPException(status_code=400, detail="Zoho integration not available")
+    
+    # Stop current sync
+    zoho_scheduler.stop_auto_sync()
+    
+    # Wait a moment
+    await asyncio.sleep(2)
+    
+    # Start new sync
+    asyncio.create_task(zoho_scheduler.start_auto_sync())
+    
+    return {
+        "success": True,
+        "message": "Zoho auto-sync restarted successfully"
+    }
+
+@app.post("/api/zoho/sync/manual", tags=["zoho-sync"])
+async def trigger_manual_sync():
+    """Trigger a manual synchronization immediately"""
+    if not ZOHO_INTEGRATION_AVAILABLE:
+        raise HTTPException(status_code=400, detail="Zoho integration not available")
+    
+    logger.info("🔄 Manual sync triggered by user")
+    result = await zoho_scheduler.perform_sync()
+    
+    if result:
+        return {
+            "success": True,
+            "message": "Manual sync completed",
+            "result": result
+        }
+    else:
+        return {
+            "success": False,
+            "message": "Manual sync failed",
+            "error": "Check logs for details"
+        }
 
 # Root endpoint
 @app.get("/")
@@ -181,7 +319,8 @@ async def read_root():
         "version": "1.0.0", 
         "status": "online",
         "docs_url": "/docs",
-        "zoho_integration": ZOHO_INTEGRATION_AVAILABLE
+        "zoho_integration": ZOHO_INTEGRATION_AVAILABLE,
+        "zoho_auto_sync": zoho_scheduler.is_running if ZOHO_INTEGRATION_AVAILABLE else False
     }
 
 # Auth endpoint for session creation
@@ -232,7 +371,8 @@ async def login(form_data: OAuth2PasswordRequestForm = Depends(), db: Session = 
             "username": user.username,
             "role": user.role,
             "expires_in": ACCESS_TOKEN_EXPIRE_MINUTES * 60,  # Seconds
-            "zoho_integration": ZOHO_INTEGRATION_AVAILABLE
+            "zoho_integration": ZOHO_INTEGRATION_AVAILABLE,
+            "zoho_auto_sync_running": zoho_scheduler.is_running if ZOHO_INTEGRATION_AVAILABLE else False
         }
     except Exception as e:
         if not isinstance(e, HTTPException):
@@ -289,6 +429,10 @@ async def health_check():
         "version": "1.0.0",
         "elasticsearch": es_status,
         "zoho_crm": zoho_status,
+        "zoho_auto_sync": {
+            "running": zoho_scheduler.is_running if ZOHO_INTEGRATION_AVAILABLE else False,
+            "last_sync": zoho_scheduler.last_sync.isoformat() if zoho_scheduler.last_sync else None
+        },
         "integrations": {
             "zoho_available": ZOHO_INTEGRATION_AVAILABLE
         }
