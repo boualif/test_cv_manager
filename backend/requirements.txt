@@ -21,3 +21,4 @@ opensearch-py==2.4.2
 python-docx==0.8.11
 python-magic
 docx2pdf
+aiohttp==3.8.5
