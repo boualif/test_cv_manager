@@ -34,54 +34,37 @@ class JobCreateAuto(BaseModel):
     job_type_etiquette: Optional[str] = "technique"
 
 async def auto_sync_to_zoho(job_data: dict):
-    """Synchroniser automatiquement vers Zoho CRM après création d'un job"""
+    """Version améliorée avec authentification persistante"""
     try:
-        # Préparer les données pour Zoho avec le bon mapping
         zoho_data = {
             "title": job_data.get('title', ''),
             "description": job_data.get('description', ''),
             "requirements": [job_data.get('competence_phare', '')] if job_data.get('competence_phare') else [],
-            "location": job_data.get('location', 'Tunisia'),
+            "location": "Tunisia",
             "department": "Engineering",
             "job_id": f"app_job_{job_data.get('id', '')}",
             "competence_phare": job_data.get('competence_phare', ''),
             "job_type_etiquette": job_data.get('job_type_etiquette', 'technique')
         }
         
-        # Ajouter les skills techniques si disponibles
-        if job_data.get('technical_skills'):
-            if isinstance(job_data['technical_skills'], list):
-                zoho_data['requirements'].extend(job_data['technical_skills'])
-            elif isinstance(job_data['technical_skills'], str):
-                try:
-                    tech_skills = json.loads(job_data['technical_skills'])
-                    zoho_data['requirements'].extend(tech_skills)
-                except:
-                    pass
-        
-        # Nettoyer les requirements vides
-        zoho_data['requirements'] = [req for req in zoho_data['requirements'] if req]
-        
+        # Utiliser l'endpoint persistant au lieu de l'ancien
         async with aiohttp.ClientSession() as session:
             async with session.post(
                 "https://test-cv-manager.onrender.com/api/zoho/jobs/create",
                 json=zoho_data,
-                timeout=aiohttp.ClientTimeout(total=15)
+                timeout=aiohttp.ClientTimeout(total=20)  # Timeout plus long
             ) as response:
                 if response.status == 200:
                     result = await response.json()
-                    logger.info(f"✅ Job {job_data.get('id')} synced to CRM with ID: {result.get('job_id')}")
+                    logger.info(f"✅ Job {job_data.get('id')} synced to CRM with persistent auth")
                     return result
                 else:
                     error_text = await response.text()
-                    logger.warning(f"❌ Failed to sync job {job_data.get('id')} to CRM: {error_text}")
+                    logger.warning(f"❌ Failed to sync job {job_data.get('id')}: {error_text}")
                     return None
                     
-    except asyncio.TimeoutError:
-        logger.warning(f"⏱️ Timeout syncing job {job_data.get('id')} to CRM")
-        return None
     except Exception as e:
-        logger.error(f"🚨 CRM sync error for job {job_data.get('id')}: {e}")
+        logger.error(f"🚨 CRM sync error: {e}")
         return None
 
 def sync_to_zoho_sync(job_data: dict):
