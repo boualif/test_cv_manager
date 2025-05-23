@@ -150,6 +150,15 @@ from app.utils.auth import authenticate_user, create_access_token, ACCESS_TOKEN_
 from app.routes import users , candidate ,dashboards,job
 from app.models.user import UserActivity
 
+# Import Zoho CRM routes
+try:
+    from app.routes.zoho_routes import router as zoho_router
+    ZOHO_INTEGRATION_AVAILABLE = True
+    logger.info("Zoho CRM integration loaded successfully")
+except ImportError as e:
+    ZOHO_INTEGRATION_AVAILABLE = False
+    logger.warning(f"Zoho CRM integration not available: {e}")
+
 # Create tables if they don't exist
 Base.metadata.create_all(bind=engine)
 
@@ -159,6 +168,11 @@ app.include_router(candidate.router, prefix="/api/candidates", tags=["candidates
 app.include_router(job.router, prefix="/api/jobs", tags=["jobs"])
 app.include_router(dashboards.router, prefix="/api/dashboards", tags=["dashboards"])
 
+# Include Zoho CRM router if available
+if ZOHO_INTEGRATION_AVAILABLE:
+    app.include_router(zoho_router, prefix="/api/zoho", tags=["zoho-crm"])
+    logger.info("Zoho CRM routes registered successfully")
+
 # Root endpoint
 @app.get("/")
 async def read_root():
@@ -166,7 +180,8 @@ async def read_root():
         "message": "Welcome to Candidate Management API",
         "version": "1.0.0", 
         "status": "online",
-        "docs_url": "/docs"
+        "docs_url": "/docs",
+        "zoho_integration": ZOHO_INTEGRATION_AVAILABLE
     }
 
 # Auth endpoint for session creation
@@ -216,7 +231,8 @@ async def login(form_data: OAuth2PasswordRequestForm = Depends(), db: Session = 
             "user_id": user.id,
             "username": user.username,
             "role": user.role,
-            "expires_in": ACCESS_TOKEN_EXPIRE_MINUTES * 60  # Seconds
+            "expires_in": ACCESS_TOKEN_EXPIRE_MINUTES * 60,  # Seconds
+            "zoho_integration": ZOHO_INTEGRATION_AVAILABLE
         }
     except Exception as e:
         if not isinstance(e, HTTPException):
@@ -241,10 +257,10 @@ async def init_admin():
             detail=f"Admin creation failed: {str(e)}"
         )
 
-# Health check endpoint with Elasticsearch status
+# Health check endpoint with Elasticsearch and Zoho status
 @app.get("/api/health", tags=["system"])
 async def health_check():
-    """Health check endpoint with Elasticsearch status"""
+    """Health check endpoint with Elasticsearch and Zoho CRM status"""
     try:
         from app.services.elasticsearch_service import ElasticsearchService
         
@@ -255,10 +271,27 @@ async def health_check():
     except:
         es_status = "unavailable"
     
+    # Check Zoho CRM connection status
+    zoho_status = "not_configured"
+    if ZOHO_INTEGRATION_AVAILABLE:
+        try:
+            from app.services.zoho_auth_service import zoho_service
+            # Try to check if we have valid tokens
+            if zoho_service.access_token:
+                zoho_status = "connected"
+            else:
+                zoho_status = "not_authenticated"
+        except:
+            zoho_status = "error"
+    
     return {
         "status": "healthy", 
         "version": "1.0.0",
-        "elasticsearch": es_status
+        "elasticsearch": es_status,
+        "zoho_crm": zoho_status,
+        "integrations": {
+            "zoho_available": ZOHO_INTEGRATION_AVAILABLE
+        }
     }
 
 # Global exception handler
