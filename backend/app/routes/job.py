@@ -16,6 +16,8 @@ from app.utils.auth import get_current_active_user, get_current_user, get_admin_
 from app.services.job_matching import analyze_candidate_cv_with_job
 import logging
 import json
+import aiohttp
+import asyncio
 from sqlalchemy.orm import Session
 
 from app.services.elasticsearch_service import ElasticsearchService
@@ -30,6 +32,71 @@ logger = logging.getLogger(__name__)
 class JobCreateAuto(BaseModel):
     description: str
     job_type_etiquette: Optional[str] = "technique"
+
+async def auto_sync_to_zoho(job_data: dict):
+    """Synchroniser automatiquement vers Zoho CRM après création d'un job"""
+    try:
+        # Préparer les données pour Zoho avec le bon mapping
+        zoho_data = {
+            "title": job_data.get('title', ''),
+            "description": job_data.get('description', ''),
+            "requirements": [job_data.get('competence_phare', '')] if job_data.get('competence_phare') else [],
+            "location": job_data.get('location', 'Tunisia'),
+            "department": "Engineering",
+            "job_id": f"app_job_{job_data.get('id', '')}",
+            "competence_phare": job_data.get('competence_phare', ''),
+            "job_type_etiquette": job_data.get('job_type_etiquette', 'technique')
+        }
+        
+        # Ajouter les skills techniques si disponibles
+        if job_data.get('technical_skills'):
+            if isinstance(job_data['technical_skills'], list):
+                zoho_data['requirements'].extend(job_data['technical_skills'])
+            elif isinstance(job_data['technical_skills'], str):
+                try:
+                    tech_skills = json.loads(job_data['technical_skills'])
+                    zoho_data['requirements'].extend(tech_skills)
+                except:
+                    pass
+        
+        # Nettoyer les requirements vides
+        zoho_data['requirements'] = [req for req in zoho_data['requirements'] if req]
+        
+        async with aiohttp.ClientSession() as session:
+            async with session.post(
+                "https://test-cv-manager.onrender.com/api/zoho/jobs/create",
+                json=zoho_data,
+                timeout=aiohttp.ClientTimeout(total=15)
+            ) as response:
+                if response.status == 200:
+                    result = await response.json()
+                    logger.info(f"✅ Job {job_data.get('id')} synced to CRM with ID: {result.get('job_id')}")
+                    return result
+                else:
+                    error_text = await response.text()
+                    logger.warning(f"❌ Failed to sync job {job_data.get('id')} to CRM: {error_text}")
+                    return None
+                    
+    except asyncio.TimeoutError:
+        logger.warning(f"⏱️ Timeout syncing job {job_data.get('id')} to CRM")
+        return None
+    except Exception as e:
+        logger.error(f"🚨 CRM sync error for job {job_data.get('id')}: {e}")
+        return None
+
+def sync_to_zoho_sync(job_data: dict):
+    """Version synchrone pour appeler la sync async"""
+    try:
+        loop = asyncio.get_event_loop()
+    except RuntimeError:
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+    
+    try:
+        return loop.run_until_complete(auto_sync_to_zoho(job_data))
+    except Exception as e:
+        logger.error(f"Error in sync wrapper: {e}")
+        return None
 
 @router.post("/auto", response_model=Dict[str, Any])
 def create_job_auto(
@@ -85,8 +152,6 @@ def create_job_auto(
         if "work_location" in comprehensive_data and comprehensive_data["work_location"]:
             new_job.location = comprehensive_data["work_location"]
             
-        # Add additional fields if your Job model supports them
-        
         # Commit the updates
         db.commit()
         db.refresh(new_job)
@@ -139,6 +204,23 @@ def create_job_auto(
         if hasattr(new_job, "location") and new_job.location:
             response["location"] = new_job.location
         
+        # 🚀 SYNCHRONISATION AUTOMATIQUE AVEC ZOHO CRM
+        try:
+            logger.info(f"🔄 Starting auto-sync to Zoho CRM for job {new_job.id}")
+            crm_result = sync_to_zoho_sync(response)
+            if crm_result and crm_result.get('success'):
+                logger.info(f"✅ Job {new_job.id} successfully synced to Zoho CRM")
+                response['zoho_synced'] = True
+                response['zoho_job_id'] = crm_result.get('job_id')
+            else:
+                logger.warning(f"⚠️ Job {new_job.id} created but CRM sync failed")
+                response['zoho_synced'] = False
+                response['zoho_error'] = "Sync failed"
+        except Exception as e:
+            logger.error(f"🚨 CRM sync error for job {new_job.id}: {e}")
+            response['zoho_synced'] = False
+            response['zoho_error'] = str(e)
+        
         return response
         
     except Exception as e:
@@ -151,6 +233,7 @@ def create_job_auto(
             status_code=500, 
             detail=f"Erreur lors de la création de l'offre d'emploi avec extraction automatique: {str(e)}"
         )
+
 # Keep the original create_job endpoint for compatibility
 @router.post("/", response_model=Dict[str, Any])
 def create_job(
@@ -187,7 +270,7 @@ def create_job(
         db.refresh(new_job)
         
         # Build the response manually
-        return {
+        response = {
             "id": new_job.id,
             "title": new_job.title,
             "description": new_job.description,
@@ -198,6 +281,25 @@ def create_job(
             "created_by_id": new_job.created_by_id,
             "created_by": current_user.username
         }
+        
+        # 🚀 SYNCHRONISATION AUTOMATIQUE AVEC ZOHO CRM
+        try:
+            logger.info(f"🔄 Starting auto-sync to Zoho CRM for job {new_job.id}")
+            crm_result = sync_to_zoho_sync(response)
+            if crm_result and crm_result.get('success'):
+                logger.info(f"✅ Job {new_job.id} successfully synced to Zoho CRM")
+                response['zoho_synced'] = True
+                response['zoho_job_id'] = crm_result.get('job_id')
+            else:
+                logger.warning(f"⚠️ Job {new_job.id} created but CRM sync failed")
+                response['zoho_synced'] = False
+                response['zoho_error'] = "Sync failed"
+        except Exception as e:
+            logger.error(f"🚨 CRM sync error for job {new_job.id}: {e}")
+            response['zoho_synced'] = False
+            response['zoho_error'] = str(e)
+        
+        return response
     except Exception as e:
         db.rollback()
         # Detailed log
@@ -209,6 +311,7 @@ def create_job(
             status_code=500, 
             detail=f"Erreur lors de la création de l'offre d'emploi: {str(e)}"
         )
+
 @router.get("/", response_model=List[Dict[str, Any]])
 def get_jobs(
     skip: int = 0,
@@ -370,6 +473,7 @@ def get_job(
             status_code=500,
             detail=f"Erreur lors de la récupération de l'offre d'emploi: {str(e)}"
         )
+
 @router.put("/{job_id}", response_model=Dict[str, Any])
 def update_job(
     job_id: int,
@@ -443,6 +547,51 @@ def delete_job(
         db.rollback()
         raise HTTPException(status_code=500, detail=f"Erreur lors de la suppression de l'offre d'emploi: {str(e)}")
 
+# Endpoint pour synchroniser manuellement un job existant vers Zoho
+@router.post("/{job_id}/sync-to-zoho")
+def sync_job_to_zoho_manual(
+    job_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """Synchroniser manuellement un job existant vers Zoho CRM"""
+    try:
+        # Récupérer le job
+        job = db.query(Job).filter(Job.id == job_id).first()
+        if not job:
+            raise HTTPException(status_code=404, detail="Job non trouvé")
+        
+        # Préparer les données
+        job_data = {
+            "id": job.id,
+            "title": job.title,
+            "description": job.description,
+            "competence_phare": job.competence_phare,
+            "job_type_etiquette": job.job_type_etiquette,
+            "technical_skills": job.technical_skills if hasattr(job, "technical_skills") else None
+        }
+        
+        # Synchroniser
+        result = sync_to_zoho_sync(job_data)
+        
+        if result and result.get('success'):
+            return {
+                "success": True,
+                "message": f"Job {job_id} synchronisé avec succès vers Zoho CRM",
+                "zoho_job_id": result.get('job_id')
+            }
+        else:
+            return {
+                "success": False,
+                "message": f"Échec de la synchronisation du job {job_id} vers Zoho CRM",
+                "error": result.get('error') if result else "Unknown error"
+            }
+            
+    except Exception as e:
+        logger.error(f"Erreur lors de la synchronisation manuelle: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Erreur de synchronisation: {str(e)}")
+
+# Tous les autres endpoints restent identiques...
 @router.post("/{job_id}/analyze-candidates", response_model=Dict[str, Any])
 def analyze_candidates(
     job_id: int,
@@ -483,6 +632,7 @@ def analyze_candidates(
         logger.error(f"Erreur lors de l'analyse des candidats: {str(e)}")
         logger.error(traceback.format_exc())
         raise HTTPException(status_code=500, detail=f"Erreur lors de l'analyse des candidats: {str(e)}")
+
 def analyze_candidate_cv_with_job(job_id: int, candidate_ids: List[int], current_user: User, db: Session) -> Dict[str, Any]:
     """
     Analyser les CV des candidats sélectionnés par rapport à une offre d'emploi.
@@ -723,6 +873,7 @@ def analyze_candidate_cv_with_job(job_id: int, candidate_ids: List[int], current
         logger.error(f"Error during analysis: {str(e)}")
         logger.error(traceback.format_exc())
         raise ValueError(f"Analysis failed: {str(e)}")
+
 @router.delete("/jobs/{job_id}/cache/{candidate_id}")
 def invalidate_analysis_cache(
     job_id: int,
