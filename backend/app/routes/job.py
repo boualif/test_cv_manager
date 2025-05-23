@@ -510,7 +510,7 @@ def update_job(
 def delete_job(
     job_id: int,
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_admin_user)  # Seuls les admins peuvent supprimer
+    current_user: User = Depends(get_current_user)  # Seuls les admins peuvent supprimer
 ):
     """Supprimer une offre d'emploi"""
     try:
